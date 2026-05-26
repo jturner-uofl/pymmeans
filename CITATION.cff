@@ -1,0 +1,62 @@
+cff-version: 1.2.0
+message: "If you use pymmeans in your research, please cite it as below."
+title: "pymmeans: Estimated marginal means for Python"
+abstract: >
+  pymmeans is a native-Python implementation of R's emmeans package
+  (Lenth 2024) for estimated marginal means (EMMs), pairwise and
+  custom contrasts, and multiplicity adjustments on fitted statistical
+  models. It supports statsmodels OLS / GLM / MixedLM / GEE / Cox /
+  BetaModel, the linearmodels panel and IV result classes, and any
+  prediction-only model with a ``.predict()`` method via a
+  beyond-R-parity ML adapter (g-computation / prediction-surface
+  averaging). The implementation uses an analytic Kronecker-product
+  marginalisation (no grid materialisation) so EMMs on designs with
+  500K-row to 46M-row reference grids run in milliseconds where R
+  emmeans refuses or runs out of memory. Inference paths include
+  Wald, Satterthwaite, Kenward-Roger (Kackar-Harville), parametric
+  bootstrap, non-parametric case bootstrap with refit, permutation
+  testing with Phipson-Smyth correction, and Bayesian / posterior
+  draws.
+authors:
+  - family-names: Turner
+    given-names: Jason
+    email: jason.s.turner@gmail.com
+version: 0.1.4
+date-released: 2026-05-25
+license: GPL-3.0-or-later
+repository-code: "https://github.com/jturner-uofl/pymmeans"
+url: "https://github.com/jturner-uofl/pymmeans"
+type: software
+keywords:
+  - estimated marginal means
+  - emmeans
+  - least-squares means
+  - lsmeans
+  - linear models
+  - mixed-effects models
+  - generalized linear models
+  - multiplicity adjustment
+  - Satterthwaite degrees of freedom
+  - Kenward-Roger correction
+  - bootstrap inference
+  - g-computation
+  - statsmodels
+  - Python
+references:
+  - type: article
+    title: "Least-squares means: the R package lsmeans"
+    authors:
+      - family-names: Lenth
+        given-names: Russell V.
+    year: 2016
+    journal: "Journal of Statistical Software"
+    volume: 69
+    issue: 1
+    doi: 10.18637/jss.v069.i01
+  - type: software
+    title: "emmeans: Estimated marginal means, aka least-squares means"
+    authors:
+      - family-names: Lenth
+        given-names: Russell V.
+    year: 2024
+    url: "https://cran.r-project.org/package=emmeans"

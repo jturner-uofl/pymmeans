@@ -1,0 +1,3 @@
+# `pymmeans.qdrg`
+
+::: pymmeans.qdrg

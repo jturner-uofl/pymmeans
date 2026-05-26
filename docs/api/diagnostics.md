@@ -1,0 +1,3 @@
+# `pymmeans.diagnostics`
+
+::: pymmeans.diagnostics

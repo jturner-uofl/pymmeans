@@ -1,0 +1,3 @@
+# `pymmeans.pbmodcomp`
+
+::: pymmeans.pbmodcomp

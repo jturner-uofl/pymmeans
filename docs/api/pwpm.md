@@ -1,0 +1,3 @@
+# `pymmeans.pwpm`
+
+::: pymmeans.pwpm
