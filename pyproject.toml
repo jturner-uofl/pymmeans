@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymmeans"
+version = "0.1.5"
+description = "Estimated marginal means for Python — a native port of R's emmeans."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Jason Turner", email = "jason.s.turner@gmail.com" }]
+requires-python = ">=3.10"
+keywords = [
+    "statistics",
+    "marginal-means",
+    "least-squares-means",
+    "emmeans",
+    "lsmeans",
+    "contrasts",
+    "post-hoc",
+    "mixed-models",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "patsy>=0.5",
+    "scipy>=1.11",
+    "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+parallel = ["joblib>=1.3"]
+tutorial = [
+    "jupyter>=1.0",
+    "ipykernel>=6.0",
+    "matplotlib>=3.7",
+    "pysofra>=0.1.0a2",
+    "scikit-learn>=1.3",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+bench = ["pytest-benchmark>=4.0"]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+]
+
+[project.urls]
+Homepage = "https://github.com/jturner-uofl/pymmeans"
+Source = "https://github.com/jturner-uofl/pymmeans"
+Issues = "https://github.com/jturner-uofl/pymmeans/issues"
+Changelog = "https://github.com/jturner-uofl/pymmeans/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pymmeans"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+# Defensive filterwarnings rule: silences a Kenward-Roger UserWarning
+# that earlier versions of `apply_kenward_roger` emitted on intercept-
+# variance corner cases. The current implementation does not emit it,
+# but the rule is retained as a no-op safety net in case a future
+# refactor reintroduces it.
+filterwarnings = [
+    "ignore:apply_kenward_roger.*intercept-variance:UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Suppress cosmetic ruff rules that conflict with statistical-notation
+# conventions in docstrings or with our preferred readable-form-over-
+# ternary style. None of these affect correctness; they are style
+# preferences.
+#
+# - RUF002 / RUF001 / RUF003: docstrings, string literals, and comments
+# include mathematical symbols (ρ for correlation, × for cross-
+# products, ², ′, etc.) that are deliberate and clearer than ASCII.
+# - RUF043: `pytest.raises(match="...")` regex patterns are deliberately
+# loose; the goal is pattern presence, not exact-anchored matching.
+# - SIM102 / SIM108: collapsing if/else into ternaries hurts readability
+# when the bodies have non-trivial right-hand-side expressions.
+# - RUF005: list concatenation via `+` is fine.
+# - B007: loop-variable not-used is fine inside `for i, lab in
+# enumerate(...)` patterns where the variable name documents intent.
+# - E702: a handful of test helpers use `import matplotlib;
+# matplotlib.use("Agg")` on a single line for backend-pin clarity.
+# - E741: single-letter variable names (`l` for level, `O` / `I` for
+# matrix identity blocks, etc.) are idiomatic in stats code and
+# match the surrounding mathematical notation.
+ignore = [
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "RUF043",
+    "SIM102",
+    "SIM108",
+    "RUF005",
+    "B007",
+    "E702",
+    "E741",
+]
+
+[tool.mypy]
+python_version = "3.10"
+# `strict = false` because the codebase predates the strict-mode goal
+# and the majority of strict-mode hits are missing-annotation warnings
+# on internal helpers that do not correspond to runtime bugs (the test
+# suite passes cleanly). Default soundness checks surface
+# `union-attr` hits on the `emmeans() -> EMMResult | RefGrid` and
+# `pairs()` family unions; downstream consumers handle only the
+# `EMMResult` / `ContrastResult` branch in practice but mypy cannot
+# prove the narrowing. Strict-mode parity is a v0.2 candidate.
+strict = false
+ignore_missing_imports = true

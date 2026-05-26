@@ -1,0 +1,3 @@
+# `pymmeans.emmeans`
+
+::: pymmeans.emmeans
