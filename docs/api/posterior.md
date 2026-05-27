@@ -1,0 +1,3 @@
+# `pymmeans.posterior`
+
+::: pymmeans.posterior
