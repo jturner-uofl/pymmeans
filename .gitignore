@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~
+.Trash-*
+
+# Jupyter checkpoint dirs
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Docs build (mkdocs writes to ./site, sphinx to docs/_build)
+docs/_build/
+site/
+.mkdocs_cache/
+
+# Benchmarks output
+benchmarks/r_results.csv
+benchmarks/PERFORMANCE_REPORT.md
+
+# Internal dev docs (kept locally; not published)
+docs/pymmeans_project_plan.md
+docs/v0_1_limits.md
+
+# JSS manuscript (separate publication track)
+paper/
+
+# Internal-only test file (regression guards from a long iterative
+# development cycle; kept locally for the maintainer, omitted from
+# the public surface)
+tests/test_audit_regressions.py
+
+# Package-manager lockfile (this is a library, not an application;
+# end-users install via pip with their own resolver)
+uv.lock

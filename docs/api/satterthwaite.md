@@ -1,0 +1,3 @@
+# `pymmeans.satterthwaite`
+
+::: pymmeans.satterthwaite

@@ -1,0 +1,3 @@
+# `pymmeans.contrasts`
+
+::: pymmeans.contrasts

@@ -1,0 +1,3 @@
+# `pymmeans.multinom`
+
+::: pymmeans.multinom

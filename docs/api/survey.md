@@ -1,0 +1,3 @@
+# `pymmeans.survey`
+
+::: pymmeans.survey
