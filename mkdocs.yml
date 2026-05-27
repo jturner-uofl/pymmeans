@@ -1,0 +1,94 @@
+site_name: pymmeans
+site_description: Estimated marginal means for Python — a native port of R's emmeans
+repo_url: https://github.com/jturner-uofl/pymmeans
+repo_name: jturner-uofl/pymmeans
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_signature_annotations: true
+            show_root_heading: true
+            heading_level: 3
+            members_order: source
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - API reference:
+      - emmeans: api/emmeans.md
+      - contrasts: api/contrasts.md
+      - emtrends: api/emtrends.md
+      - plotting: api/plotting.md
+      - summary (bootstrap + permutation): api/summary.md
+      - summary_layer (summary/confint/test/update/as_r_frame): api/summary_layer.md
+      - joint_tests: api/joint.md
+      - satterthwaite: api/satterthwaite.md
+      - pbmodcomp (parametric-bootstrap nested test): api/pbmodcomp.md
+      - pbktest (Kenward-Roger / Satterthwaite F-tests): api/pbktest.md
+      - ordinal (cumulative-link ordinal regression): api/ordinal.md
+      - multinom (multinomial-logit EMMs): api/multinom.md
+      - qdrg (hand-built reference grids): api/qdrg.md
+      - adjustments: api/adjustments.md
+      - utils: api/utils.md
+      - adapters (register_adapter / protocol): api/adapters.md
+      - ml (predict-only adapter): api/ml.md
+      - posterior (PyMC / arviz): api/posterior.md
+      - cld (compact letter display): api/cld.md
+      - pwpm (pairwise comparison matrix): api/pwpm.md
+      - transforms (back-transformation): api/transforms.md
+      - options: api/options.md
+      - ref_grid: api/ref_grid.md
+      - diagnostics (health_check): api/diagnostics.md
+      - survey (design-corrected vcov): api/survey.md
+  - vs R emmeans:
+      - Performance: PERFORMANCE_REPORT.md
+      - Validation: vs-r.md
+      - Parity matrix: r_parity_matrix.md
+  - Project:
+      - v0.2 roadmap: v0_2_roadmap.md

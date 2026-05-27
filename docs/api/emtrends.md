@@ -1,0 +1,3 @@
+# `pymmeans.trends`
+
+::: pymmeans.trends

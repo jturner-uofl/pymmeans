@@ -1,0 +1,3 @@
+# `pymmeans.ordinal`
+
+::: pymmeans.ordinal

@@ -1,0 +1,3 @@
+# `pymmeans.joint`
+
+::: pymmeans.joint

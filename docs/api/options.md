@@ -1,0 +1,3 @@
+# `pymmeans.options`
+
+::: pymmeans.options
