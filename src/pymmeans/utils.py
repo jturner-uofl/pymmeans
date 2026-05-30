@@ -246,6 +246,21 @@ class ModelInfo:
     via ``patsy.build_design_matrices``, closing the GAM-smooth-terms
     parity gap with R ``emmeans``."""
 
+    smoother_info: Any = None
+    """``(smoother, variable_names)`` for a statsmodels GLMGam fit, or
+    ``None``. ``smoother`` is the fitted ``BSplines`` / spline-basis
+    object whose ``.transform(X)`` re-evaluates the penalised spline
+    basis at arbitrary new covariate values; ``variable_names`` is the
+    list of data columns feeding it. When set, the GLM's design is
+    ``[linear_part | smoother_basis]`` and ``design_info`` covers only
+    the LINEAR part — :func:`pymmeans.ref_grid.ref_grid` appends
+    ``smoother.transform(grid[variable_names])`` to the linear linfct
+    so EMMs are smoother-correct at any grid point (including
+    user-supplied covariate values). Built by
+    :func:`from_glmgam`. Dropped on pickle (the smoother object isn't
+    reliably picklable, and post-pickle grid rebuilds are refused
+    anyway)."""
+
     @property
     def n_params(self) -> int:
         """Number of fixed-effect coefficients in ``beta``."""
@@ -269,6 +284,7 @@ class ModelInfo:
         state["design_info"] = None
         state["raw_result"] = None
         state["data"] = pd.DataFrame() # empty placeholder
+        state["smoother_info"] = None # smoother object isn't picklable
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -534,6 +550,151 @@ def from_fitted(result: Any, **kwargs: Any) -> ModelInfo:
     return dispatch(result, **kwargs)
 
 
+def from_glmgam(result: Any, formula: str) -> ModelInfo:
+    """Build a :class:`ModelInfo` for a statsmodels ``GLMGam`` fit.
+
+    statsmodels' GAM (``GLMGam``) appends a penalised spline basis to
+    the patsy-parsed linear design AFTER processing the formula, and
+    discards both the formula string and the linear ``design_info`` —
+    so the generic adapter can't reconstruct the reference grid (this
+    is why ``emmeans(glmgam_fit, ...)`` refuses). Pass the LINEAR
+    ``formula`` you fit with (e.g. ``"y ~ g"`` — the part WITHOUT the
+    smoother) and pymmeans rebuilds the linear design and re-evaluates
+    the spline basis at every EMM grid point via the smoother's
+    ``.transform``.
+
+    Result: EMMs are smoother-correct at any covariate value. For a
+    categorical target the spline variable reduces to its training
+    mean (the standard "adjust for the smooth" behaviour); to vary it,
+    pass it via ``at=`` / ``cov_keep=`` and the basis is re-evaluated
+    at each requested value — matching R ``mgcv::gam`` + ``emmeans``.
+
+    Parameters
+    ----------
+    result
+        A fitted ``GLMGam`` results object
+        (``GLMGam.from_formula(formula, data, smoother=...).fit()``).
+    formula
+        The LINEAR model formula (no smoother term), e.g. ``"y ~ g"``.
+
+    Raises
+    ------
+    TypeError
+        If ``result`` is not a GLMGam fit.
+    ValueError
+        If the smoother's variables aren't recoverable as data columns
+        (the smoother was built from a bare numpy array — rebuild it
+        from a named DataFrame, e.g. ``BSplines(df[["x"]], ...)``), or
+        if the linear + smoother column counts don't reconcile with
+        the coefficient vector.
+
+    Examples
+    --------
+    >>> from statsmodels.gam.api import BSplines, GLMGam  # doctest: +SKIP
+    >>> bs = BSplines(df[["x"]], df=[6], degree=[3])       # doctest: +SKIP
+    >>> fit = GLMGam.from_formula("y ~ g", df, smoother=bs).fit()  # doctest: +SKIP
+    >>> from pymmeans import from_glmgam, emmeans          # doctest: +SKIP
+    >>> info = from_glmgam(fit, "y ~ g")                   # doctest: +SKIP
+    >>> emmeans(info, "g")                  # smoother at mean  # doctest: +SKIP
+    >>> emmeans(info, "x", at={"x": [2, 5, 8]})    # curve  # doctest: +SKIP
+    """
+    import dataclasses as _dc
+
+    model = getattr(result, "model", None)
+    if model is None or type(model).__name__ != "GLMGam":
+        raise TypeError(
+            "from_glmgam expects a fitted statsmodels GLMGam result; "
+            f"got {type(result).__name__}. For ordinary OLS / GLM "
+            "fits use emmeans(fit, ...) directly."
+        )
+    smoother = getattr(model, "smoother", None)
+    if smoother is None:
+        raise TypeError(
+            "GLMGam result has no .smoother; cannot rebuild the spline "
+            "basis at grid points."
+        )
+
+    data = getattr(model.data, "frame", None)
+    if data is None or len(data) == 0:
+        raise ValueError(
+            "from_glmgam needs the original training frame on "
+            "result.model.data.frame; it is missing or empty."
+        )
+
+    svars = list(getattr(smoother, "variable_names", []) or [])
+    missing = [v for v in svars if v not in data.columns]
+    if missing:
+        raise ValueError(
+            f"GLMGam smoother variables {missing} are not columns of "
+            "the training frame — the smoother was almost certainly "
+            "built from a bare numpy array (statsmodels then names the "
+            f"variables {svars}). Rebuild it from a named DataFrame so "
+            "the basis maps to data columns, e.g. "
+            "`BSplines(df[['x']], df=[6], degree=[3])`, then refit."
+        )
+
+    # Reconstruct the linear-part ModelInfo by fitting a throwaway OLS
+    # on the supplied formula. This reuses the fully-validated patsy
+    # factor / numeric / design_info extraction in from_statsmodels;
+    # only the design STRUCTURE is used — the OLS coefficients are
+    # discarded and replaced with GLMGam's full beta / vcov below.
+    import statsmodels.formula.api as smf
+
+    try:
+        lin_fit = smf.ols(formula, data).fit()
+    except Exception as exc:
+        raise ValueError(
+            f"from_glmgam could not fit the linear formula {formula!r} "
+            f"against the training frame: {type(exc).__name__}: {exc}. "
+            "Pass the exact LINEAR formula used in "
+            "GLMGam.from_formula(...) (without the smoother term)."
+        ) from exc
+    lin_info = from_statsmodels(lin_fit)
+    n_lin = lin_info.n_params
+
+    beta = np.asarray(result.params, dtype=float)
+    vcov = np.asarray(result.cov_params(), dtype=float)
+    dim_basis = int(getattr(smoother, "dim_basis", 0))
+    if n_lin + dim_basis != len(beta):
+        raise ValueError(
+            f"from_glmgam column-count mismatch: linear design has "
+            f"{n_lin} columns, smoother basis has {dim_basis}, but the "
+            f"coefficient vector has {len(beta)}. The supplied formula "
+            f"{formula!r} likely doesn't match the linear part of the "
+            "fitted GLMGam."
+        )
+
+    param_names = (
+        list(result.params.index)
+        if hasattr(result.params, "index")
+        else [*lin_info.param_names, *getattr(smoother, "col_names", [])]
+    )
+
+    # Add the smoother variables to numeric_means so the reference grid
+    # includes them (reduced to their training mean by default).
+    num_means = dict(lin_info.numeric_means)
+    for v in svars:
+        if v not in num_means:
+            num_means[v] = float(data[v].mean())
+
+    return _dc.replace(
+        lin_info,
+        beta=beta,
+        vcov=vcov,
+        param_names=param_names,
+        numeric_means=num_means,
+        family=_response_family_for_model(model),
+        scale=float(getattr(result, "scale", 1.0) or 1.0),
+        df_resid=float(getattr(result, "df_resid", lin_info.df_resid)),
+        raw_result=result,
+        smoother_info=(smoother, svars),
+        # The linear OLS estimability basis covers only n_lin columns;
+        # drop it so the contrast estimability check rebuilds from the
+        # full GLMGam design (n_lin + dim_basis columns) instead.
+        estimability_basis=None,
+    )
+
+
 def _response_family_for_model(model: Any) -> Any:
     """Best-effort `family` extraction for response-scale EMMs.
 
@@ -759,6 +920,35 @@ def from_statsmodels(result: Any) -> ModelInfo:
     data_attr = getattr(model, "data", None)
     design_info = getattr(data_attr, "design_info", None) if data_attr else None
     if design_info is None:
+        # custom refusal so the user sees the
+        # exact mismatch and a concrete workaround. GLMGam appends
+        # smoother basis columns AFTER patsy parses the formula, which
+        # leaves ``model.data.design_info`` unset even though the
+        # categorical-part design is internally consistent. Supporting
+        # GLMGam properly requires re-evaluating the smoother basis at
+        # the EMM grid points (so numeric x= predictions are
+        # smoother-correct); that's a 0.3.0 candidate. For now point
+        # users at the qdrg() escape hatch, which lets them supply the
+        # full augmented design at training-data means.
+        if _cls_name == "GLMGam":
+            raise NotImplementedError(
+                "GLMGam (statsmodels GAM with spline smoothers) needs "
+                "the dedicated ``from_glmgam`` constructor: statsmodels "
+                "appends the smoother basis to the design AFTER patsy "
+                "parses the formula and discards the formula, so the "
+                "generic adapter can't rebuild the reference grid. "
+                "Pass the LINEAR formula you fit with:\n\n"
+                "  from pymmeans import from_glmgam, emmeans\n"
+                "  info = from_glmgam(fit, 'y ~ g')\n"
+                "  emmeans(info, 'g')                    # smoother at mean\n"
+                "  emmeans(info, 'x', at={'x': [2, 5, 8]})  # smooth curve\n\n"
+                "The spline basis is re-evaluated at each grid point via "
+                "the smoother's ``.transform``, so numeric-target EMMs "
+                "are smoother-correct (matching R ``mgcv::gam`` + "
+                "``emmeans``). The smoother must have been built from a "
+                "named DataFrame (e.g. ``BSplines(df[['x']], ...)``) so "
+                "its variables map to data columns."
+            )
         raise ValueError(
             "Model has no design_info. pymmeans requires a model fit via the "
             "statsmodels formula API (smf.ols / smf.glm) so that factor "

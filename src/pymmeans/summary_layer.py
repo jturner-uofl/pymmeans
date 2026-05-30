@@ -633,6 +633,8 @@ def summary(
     by: str | list[str] | None | object = _BY_UNSET,
     bias_adjust: bool | None = None,
     sigma: float | None = None,
+    *,
+    cross_adjust: str | None = None,
 ) -> pd.DataFrame:
     """Recompute the CI / test columns on an EMMResult or ContrastResult.
 
@@ -1645,6 +1647,90 @@ def summary(
                     p_adj = np.clip(p, 0.0, 1.0)
         else:
             p_adj = np.clip(p, 0.0, 1.0)
+
+        # ``cross_adjust=`` second-stage adjustment. Mirrors R
+        # ``summary(em, adjust=..., cross.adjust=...)``: after the
+        # per-family ``adjust`` correction (above), pool every row's
+        # adjusted p-value into a single family and apply
+        # ``cross_adjust`` across that pool. The closure principle
+        # (Marcus, Peritz & Gabriel 1976) makes the composition a
+        # valid familywise-error-rate procedure.
+        #
+        # Family-internal methods (tukey / dunnett / scheffe / mvt)
+        # depend on a correlation structure across THE specific
+        # contrasts inside one family; they don't generalise to a
+        # pool of already-adjusted p-values across heterogeneous
+        # families. Refuse those for cross_adjust.
+        # Only APPLY cross_adjust when pooling >= 2 families, but
+        # always VALIDATE the method name when cross_adjust is given.
+        # R treats ``cross.adjust`` on a single family as a clean
+        # no-op — the family-internal ``adjust`` has already
+        # controlled the familywise error, and a second pass would
+        # double-penalise. Gating on the contrast count rather than
+        # the family count would wrongly double-adjust a single
+        # family of pairwise contrasts. ``cross_adjust`` is only
+        # meaningful when pooling >= 2 families (the closure principle
+        # composes per-family corrections into a cross-family one).
+        # We still reject family-internal / correlation-aware methods
+        # up front regardless of family count so a typo or misuse
+        # surfaces immediately instead of silently no-opping.
+        if cross_adjust is not None:
+            cross_lower = cross_adjust.lower()
+            if cross_lower in (
+                "tukey", "dunnett", "scheffe", "mvt", "dunnettx",
+            ):
+                raise ValueError(
+                    f"cross_adjust={cross_adjust!r} is a family-"
+                    "internal correlation-aware adjustment and can't "
+                    "be used as the cross-family correction. Pick a "
+                    "step-down / step-up method: 'bonferroni' / "
+                    "'sidak' / 'holm' / 'bh' / 'by' / 'hochberg' / "
+                    "'hommel'."
+                )
+            # Read family meta directly from the object — the local
+            # ``meta`` is only bound on the family-adjust path, but
+            # cross_adjust can run after ``adjust='none'`` too.
+            _cross_meta = getattr(obj, "_adjust_meta", None)
+            n_families = (
+                len(_cross_meta["families"])
+                if (_cross_meta and _cross_meta.get("families"))
+                else 1
+            )
+            if cross_lower in ("none", "no"):
+                # explicit no-op (R parity)
+                pass
+            elif n_families <= 1:
+                # Single family: ``cross_adjust`` is a clean no-op.
+                # The family-internal ``adjust`` already controls the
+                # familywise error for this single family.
+                pass
+            else:
+                valid_cross = np.isfinite(p_adj)
+                n_valid_cross = int(valid_cross.sum())
+                if n_valid_cross > 1:
+                    try:
+                        p_cross = adjust_pvalues(
+                            p_adj[valid_cross],
+                            cross_adjust,
+                            n_means=n_valid_cross,
+                            # cross-family pool has no shared df;
+                            # use the median df as a reasonable
+                            # central estimate for methods that
+                            # need one (none of the supported
+                            # cross-methods actually use df).
+                            df=float(np.nanmedian(df_arr[valid_cross])),
+                            t_ratios=t_ratio[valid_cross],
+                        )
+                        out_cross = np.full(len(p_adj), np.nan)
+                        out_cross[valid_cross] = p_cross
+                        p_adj = out_cross
+                    except (ValueError, TypeError) as exc:
+                        raise ValueError(
+                            f"cross_adjust={cross_adjust!r} failed "
+                            f"to apply: {type(exc).__name__}: {exc}. "
+                            "Try 'bonferroni' as a conservative "
+                            "fallback."
+                        ) from exc
         out["p_value"] = p_adj
     else:
         out = out.drop(columns=["t_ratio", "p_value"], errors="ignore")

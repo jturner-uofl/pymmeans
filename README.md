@@ -4,7 +4,7 @@ Estimated marginal means (EMMs) for Python — a native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) package, with no R
 dependency.
 
-> Status: **Beta** (v0.1.8). API stable across the OLS / GLM / MixedLM /
+> Status: **Beta** (v0.2.0). API stable across the OLS / GLM / MixedLM /
 > GEE / Cox / Beta surface; 84/100 strict parity with R `emmeans` (88/100
 > if partially-supported items count — see
 > [docs/r_parity_matrix.md](https://github.com/jturner-uofl/pymmeans/blob/main/docs/r_parity_matrix.md))
@@ -104,8 +104,8 @@ self-contained HTML render at
 | `joint_tests(model)` | Type III joint Wald F (or χ²) tests for every non-intercept term. |
 | `pairs(emm, simple=, max_contrasts=)` | Guard against the multi-factor-pairwise explosion footgun, plus `simple=` per-factor decomposition (R parity). `contrast(simple=, combine=)` for the same on non-pairwise methods. |
 | `ml_emmeans(info, specs, by=, at=)` + `ml_pairs` + `ml_contrast(method=)` | Marginal means for any ML model with `.predict()` (sklearn, xgboost, lightgbm, torch). Population-average prediction surface (g-computation). |
-| `apply_satterthwaite(emm)` | Replace `df=∞` with Satterthwaite df for `MixedLM` fits using `cov_re` or `re_formula=` random effects. Crossed-RE designs via `vc_formula=` (statsmodels variance-component syntax) are not yet supported — refit with `re_formula=` to bring those components inside `cov_re`, or use Wald inference. Same coverage applies to `apply_kenward_roger`. |
-| `apply_kenward_roger(emm)` | KR-inflated vcov + KR df. Same `cov_re` / `re_formula=` coverage as `apply_satterthwaite`. Cross-validated against `pbkrtest::KRmodcomp` (Kackar-Harville form). |
+| `apply_satterthwaite(emm)` | Replace `df=∞` with Satterthwaite df for `MixedLM` fits using `cov_re` / `re_formula=` random effects **and** `vc_formula=` variance components (crossed / nested designs). Same coverage applies to `apply_kenward_roger`. |
+| `apply_kenward_roger(emm)` | KR-inflated vcov + KR df. Same `cov_re` / `re_formula=` / `vc_formula=` coverage as `apply_satterthwaite`. Cross-validated against `pbkrtest::KRmodcomp`; KR SE matches R's published `vc_formula=` output to 3 decimals. |
 | `krmodcomp` / `satmodcomp` / `pbmodcomp` / `kenward_roger_vcov` / `get_kr` / `ddf_lb` | The six headline `pbkrtest` functions ported to Python. |
 | `regrid_response(emm, bias_adjust=)` | LHS-transformation back-transform (`np.log(y)`, `np.sqrt(y)`, `np.log1p(y)`, ...). Optional Jensen `σ²/2` correction. |
 | `weights="proportional"` / `"outer"` | Weighted averaging over non-target factors (training-data marginals). Default is `"equal"` (uniform). |

@@ -72,12 +72,22 @@ class StatsmodelsAdapter:
 
     @staticmethod
     def detects(result: Any) -> bool:
-        """True iff ``result`` carries a patsy ``design_info``."""
+        """True iff ``result`` carries a patsy ``design_info`` OR is a
+        statsmodels result class we know about even when ``design_info``
+        is unattached (so the ``from_statsmodels`` path can surface a
+        targeted refusal with workaround steering instead of the
+        generic ``No adapter recognises X`` dispatch error)."""
         model = getattr(result, "model", None)
         if model is None:
             return False
         data = getattr(model, "data", None)
-        return data is not None and hasattr(data, "design_info")
+        if data is not None and hasattr(data, "design_info"):
+            return True
+        # GLMGam appends spline-basis columns AFTER the patsy parse,
+        # leaving design_info unset. Recognise it here so
+        # ``from_statsmodels`` can raise the qdrg-workaround refusal at
+        # the right layer.
+        return type(model).__name__ == "GLMGam"
 
     @staticmethod
     def build(result: Any, **_kwargs: Any) -> ModelInfo:

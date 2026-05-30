@@ -68,6 +68,69 @@ def _fit_case_2(dat: pd.DataFrame) -> tuple:
     return large, small
 
 
+def _fit_case_3_vc() -> tuple:
+    """oats split-plot with TWO variance components — the
+    ``vc_formula=`` path. large: yld ~ Variety + nitro +
+    (1|Block) + (1|Block:Variety); small drops nitro (df_num = 3).
+    Skips if the vc reference data is absent."""
+    vc_data = Path("tests/r_reference/pbkrtest_ftests_vc_data.csv")
+    if not vc_data.exists():
+        pytest.skip(
+            "Run tests/r_reference/pbkrtest_ftests.R to generate the "
+            "vc_formula KRmodcomp/SATmodcomp reference."
+        )
+    oa = pd.read_csv(vc_data)
+    for c in ("Block", "Variety", "nitro", "BlockVariety"):
+        oa[c] = pd.Categorical(oa[c])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        large = mlm.MixedLM.from_formula(
+            "yld ~ Variety + C(nitro)", groups="Block", re_formula="1",
+            vc_formula={"BlockVariety": "0 + C(BlockVariety)"}, data=oa,
+        ).fit(reml=True)
+        small = mlm.MixedLM.from_formula(
+            "yld ~ Variety", groups="Block", re_formula="1",
+            vc_formula={"BlockVariety": "0 + C(BlockVariety)"}, data=oa,
+        ).fit(reml=True)
+    return large, small
+
+
+def test_krmodcomp_matches_pbkrtest_case_3_vc_formula():
+    """vc_formula= Kenward-Roger F-test (the new support). Two scalar
+    variance components (Block, Block:Variety) enter the K-R kernel's
+    V_beta / W / P_list via the parameter vector
+    ``(vech(G), {vcomp_v}, σ²_e)``. Before the kernel extension the
+    df was ~20 % too large (52 vs 43) because the variance-component
+    blocks were ignored; now F, ddf, and F.scaling match
+    pbkrtest::KRmodcomp to ~1e-2 (the residual is the statsmodels-vs-
+    lme4 REML optimiser difference, not the K-R math)."""
+    large, small = _fit_case_3_vc()
+    assert large.model.k_vc >= 1
+    _, ref = _load_reference()
+    res = krmodcomp(large, small)
+    r = ref[(ref.case == "case3") & (ref.method == "KR")].iloc[0]
+    assert res.ndf == int(r.ndf) == 3
+    np.testing.assert_allclose(res.F, r.stat, atol=1e-2)
+    np.testing.assert_allclose(res.ddf, r.ddf, atol=0.5)
+    np.testing.assert_allclose(res.F_scaling, r["F.scaling"], atol=1e-3)
+    np.testing.assert_allclose(res.p_value, r["p.value"], rtol=1e-1)
+
+
+def test_satmodcomp_matches_pbkrtest_case_3_vc_formula():
+    """vc_formula= Satterthwaite F-test. Routes through the same
+    vc-aware Satterthwaite/KR internals as the EMM df, so it inherits
+    the documented finite-difference variance-component-df
+    approximation: F matches pbkrtest::SATmodcomp to ~1 % and ddf to
+    a few percent (looser than the cov_re-only case)."""
+    large, small = _fit_case_3_vc()
+    _, ref = _load_reference()
+    res = satmodcomp(large, small)
+    r = ref[(ref.case == "case3") & (ref.method == "SAT")].iloc[0]
+    assert res.ndf == int(r.ndf) == 3
+    np.testing.assert_allclose(res.F, r.stat, atol=0.5)
+    np.testing.assert_allclose(res.ddf, r.ddf, rtol=0.12)
+
+
 def test_krmodcomp_matches_pbkrtest_case_1_rank_1():
     """rank-1 nested test (sleepstudy intercept-only RE,
     Days fixed-effect test). Pure scalar F-test — K-R adjustment

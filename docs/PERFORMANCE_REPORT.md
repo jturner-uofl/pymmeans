@@ -1,6 +1,6 @@
 # pymmeans vs R emmeans — Performance Comparison
 
-Timings on the developer's machine. Numbers are wall-clock seconds for the EMM/pairs operation only (model fit excluded). pymmeans 0.1.8; R 4.6, emmeans 2.0.3.
+Timings on the developer's machine. Numbers are wall-clock seconds for the EMM/pairs operation only (model fit excluded). pymmeans 0.2.0; R 4.6, emmeans 2.0.3.
 
 | Scenario | R emmeans | pymmeans | Speedup |
 |---|---|---|---|

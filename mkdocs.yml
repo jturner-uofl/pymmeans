@@ -73,6 +73,8 @@ nav:
       - pbktest (Kenward-Roger / Satterthwaite F-tests): api/pbktest.md
       - ordinal (cumulative-link ordinal regression): api/ordinal.md
       - multinom (multinomial-logit EMMs): api/multinom.md
+      - multivariate (mlm + mvcontrast Hotelling): api/multivariate.md
+      - aft (Accelerated Failure Time, lifelines): api/aft.md
       - qdrg (hand-built reference grids): api/qdrg.md
       - adjustments: api/adjustments.md
       - utils: api/utils.md
@@ -84,6 +86,7 @@ nav:
       - transforms (back-transformation): api/transforms.md
       - options: api/options.md
       - ref_grid: api/ref_grid.md
+      - grid_ops (add_grouping / comb_facs / split_fac / permute_levels): api/grid_ops.md
       - diagnostics (health_check): api/diagnostics.md
       - survey (design-corrected vcov): api/survey.md
   - vs R emmeans:

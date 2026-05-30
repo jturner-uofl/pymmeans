@@ -146,19 +146,46 @@ def _compute_pbkrtest_aux_core(
     G: np.ndarray,
     sigma_sq: float,
     V_KR: np.ndarray,
+    vc_mats: tuple[dict, ...] = (),
+    vcomp: np.ndarray | tuple[float, ...] = (),
 ) -> dict:
     """Core math kernel: build V_β, W, P_list in pbkrtest's
-    parameterisation ``φ = (vech(G), σ²_e)`` from raw inputs.
+    parameterisation ``φ = (vech(G), {vcomp_v}, σ²_e)`` from raw inputs.
 
     Decoupled from any specific fit-object API so that callers
     holding only a pickle-safe ``_SattCache`` can reach it. The
     fit-based wrapper :func:`_compute_pbkrtest_aux` just unpacks
     the fit and delegates here.
+
+    ``vc_formula=`` support. When ``vc_mats`` / ``vcomp`` are supplied
+    the per-group marginal covariance gains the variance-component
+    blocks ``Σ_v vcomp_v · (Z_vc · Z_vc')`` (matching the
+    R-validated EMM Satterthwaite/KR construction in
+    ``satterthwaite._vc_cov_block``), and the parameter vector grows
+    by one entry per component, inserted between ``vech(G)`` and
+    ``σ²_e``. Each VC's derivative block is ``∂Σ_g/∂vcomp_v =
+    Z_vc · Z_vc'`` (coefficient 1, absolute units). With ``vc_mats``
+    empty the construction is byte-identical to the cov_re-only path.
+    ``vc_mats[v]`` is a ``{group_id: Z_vc}`` map (a group absent from
+    the map — no levels of that component present — contributes a
+    zero block).
     """
     k_re = int(G.shape[0])
     vech_idx = [(i, j) for i in range(k_re) for j in range(i + 1)]
     n_g = len(vech_idx)
-    n_phi = n_g + 1
+    vcomp = np.asarray(vcomp, dtype=float)
+    n_vc = len(vcomp)
+    n_phi = n_g + n_vc + 1
+
+    def _vc_block(g_id: Any, n_obs_g: int) -> np.ndarray:
+        """Σ_v vcomp_v · (Z_vc Z_vc') for group g_id (absolute units)."""
+        out = np.zeros((n_obs_g, n_obs_g))
+        for v in range(n_vc):
+            Zvc = vc_mats[v].get(g_id) if v < len(vc_mats) else None
+            if Zvc is None or Zvc.size == 0:
+                continue
+            out = out + vcomp[v] * (Zvc @ Zvc.T)
+        return out
 
     def build_Sigma_groups(G_in: np.ndarray, sigma_sq_in: float) -> list[np.ndarray]:
         Vs = []
@@ -166,7 +193,8 @@ def _compute_pbkrtest_aux_core(
             m = groups == g_id
             Z_g = Z[m]
             n_obs_g = int(m.sum())
-            V_g = Z_g @ G_in @ Z_g.T + sigma_sq_in * np.eye(n_obs_g)
+            V_g = (Z_g @ G_in @ Z_g.T + sigma_sq_in * np.eye(n_obs_g)
+                   + _vc_block(g_id, n_obs_g))
             Vs.append(V_g)
         return Vs
 
@@ -177,7 +205,8 @@ def _compute_pbkrtest_aux_core(
             Z_g = Z[m]
             X_g = X[m]
             n_obs_g = int(m.sum())
-            V_g = Z_g @ G_in @ Z_g.T + sigma_sq_in * np.eye(n_obs_g)
+            V_g = (Z_g @ G_in @ Z_g.T + sigma_sq_in * np.eye(n_obs_g)
+                   + _vc_block(g_id, n_obs_g))
             A += X_g.T @ np.linalg.solve(V_g, X_g)
         return np.linalg.inv(A)
 
@@ -189,7 +218,8 @@ def _compute_pbkrtest_aux_core(
     SigmaInv_groups = [np.linalg.inv(S) for S in Sigma_groups]
 
     def Vp_g_for_phi(r: int, g_idx: int) -> np.ndarray:
-        Z_g = Z[groups == group_ids[g_idx]]
+        g_id = group_ids[g_idx]
+        Z_g = Z[groups == g_id]
         n_obs_g = Z_g.shape[0]
         if r < n_g:
             i, j = vech_idx[r]
@@ -200,6 +230,12 @@ def _compute_pbkrtest_aux_core(
                 E_ij[i, j] = 1.0
                 E_ij[j, i] = 1.0
             return Z_g @ E_ij @ Z_g.T
+        if r < n_g + n_vc:
+            v = r - n_g
+            Zvc = vc_mats[v].get(g_id) if v < len(vc_mats) else None
+            if Zvc is None or Zvc.size == 0:
+                return np.zeros((n_obs_g, n_obs_g))
+            return Zvc @ Zvc.T
         return np.eye(n_obs_g)
 
     Vp_groups = [
@@ -295,6 +331,9 @@ def _compute_pbkrtest_aux(fit: Any) -> dict:
     G = np.asarray(fit.cov_re, dtype=float)
     sigma_sq = float(fit.scale)
 
+    # vc_formula= variance components (absolute units): vcomp_v =
+    # theta_vc[v]**2 * sigma_sq, matching satterthwaite._vc_cov_block.
+    vcomp = (np.asarray(cache.theta_vc_hat, dtype=float) ** 2) * sigma_sq
     aux = _compute_pbkrtest_aux_core(
         X=cache.X,
         Z=cache.Z,
@@ -303,6 +342,8 @@ def _compute_pbkrtest_aux(fit: Any) -> dict:
         G=G,
         sigma_sq=sigma_sq,
         V_KR=V_KR,
+        vc_mats=cache.vc_mats,
+        vcomp=vcomp,
     )
     return dict(
         V_beta=aux["V_beta"],
@@ -589,6 +630,14 @@ def krmodcomp(large: Any, small: Any) -> FtestResult:
     Days^2 + (Days|Subject)`` vs ``~ 1 + (Days|Subject)``). See
     ``tests/r_reference/pbkrtest_ftests.R``.
 
+    ``vc_formula=`` variance-component models are supported: the
+    auxiliary kernel incorporates each component's design block into
+    ``V_beta`` / ``W`` / ``P_list`` (parameter vector
+    ``(vech(G), {vcomp_v}, σ²_e)``). Validated against
+    ``pbkrtest::KRmodcomp`` on the canonical split-plot ``oats``
+    model with Block and Block:Variety components (``F``, ``ddf``,
+    ``F.scaling`` all to ~1e-4; case3 in the reference).
+
     References
     ----------
     - Kenward, M. G., & Roger, J. H. (1997). Small Sample Inference
@@ -664,6 +713,14 @@ def satmodcomp(large: Any, small: Any) -> FtestResult:
     statistic and ``atol=0.5`` on ``ddf`` (the multi-DF
     Satterthwaite df has substantial finite-difference noise from
     the V_β gradient). See ``tests/r_reference/pbkrtest_ftests.R``.
+
+    ``vc_formula=`` variance-component models are supported via the
+    same vc-aware Satterthwaite/KR internals used for EMM df: the
+    ``P_list`` / ``W`` returned by :func:`kenward_roger_vcov`
+    incorporate the variance components. On the ``oats`` split-plot
+    case the F matches R to ~1% and ``ddf`` to a few percent (the
+    finite-difference variance-component-df approximation, the same
+    bound documented for EMM Kenward-Roger df on vc fits).
     """
     L = _build_nested_L(large, small)
     info = from_fitted(large)

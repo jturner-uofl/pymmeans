@@ -215,6 +215,8 @@ def posterior_emmeans(
     type: str = "link",
     tran: Any = None,
     weights: str | None = None,
+    *,
+    mode: str | None = None,
 ) -> EMMResult:
     """Posterior-based emmeans on a Bayesian fit.
 
@@ -257,9 +259,68 @@ def posterior_emmeans(
         ``inverse(E[L beta])`` (which is what
         :func:`regrid_response` would give if it weren't refused on
         posterior inputs).
+    mode
+        Optional R-style alias for ``type=``. Mirrors brms / rstanarm
+        ``emmeans(..., mode = ...)``. Mutually exclusive with
+        ``type=``. Supported values:
+
+        - ``"latent"`` / ``"linear.predictor"`` / ``"link"``
+          → equivalent to ``type="link"``.
+        - ``"response"`` / ``"prob"`` / ``"mean"``
+          → equivalent to ``type="response"``.
+        - ``"mean.class"`` is refused on the generic path because it
+          requires per-category posterior summaries; use
+          :func:`pymmeans.ordinal_emmeans` / :func:`pymmeans.multinom_emmeans`
+          instead.
     """
     from pymmeans.emmeans import emmeans as _emmeans
     from pymmeans.transforms import detect_transform
+
+    # R-style ``mode=`` aliases.
+    # brms / rstanarm use ``mode=`` for the EMM scale on Bayesian fits.
+    # We accept R's vocabulary and route it to our existing ``type=``
+    # semantics so users transferring code from R don't have to learn
+    # a second name. ``mode=`` and ``type=`` are mutually exclusive
+    # (refused with a clear message) so the resolved scale is never
+    # ambiguous.
+    #
+    # Maps:
+    #   - latent / linear.predictor / link  → type='link'
+    #   - response / prob / mean             → type='response'
+    #   - mean.class                         → not supported on the
+    #     generic posterior path (steers to ordinal_emmeans/multinom_emmeans)
+    if mode is not None:
+        # Explicit type= AND explicit mode= is ambiguous; refuse.
+        if type != "link":
+            raise ValueError(
+                "Pass either `mode=` (R-style) OR `type=` (pymmeans-"
+                "style), not both. `mode=` and `type=` are aliases "
+                f"for the same display scale; got mode={mode!r}, "
+                f"type={type!r}."
+            )
+        m = mode.lower().strip()
+        if m in ("latent", "linear.predictor", "linear_predictor", "link"):
+            type = "link"
+        elif m in ("response", "prob", "mean"):
+            type = "response"
+        elif m == "mean.class":
+            raise NotImplementedError(
+                "mode='mean.class' is only meaningful for ordinal / "
+                "multinomial Bayesian fits, where the posterior is "
+                "over category probabilities. Use the dedicated "
+                "entry points instead:\n"
+                "  - Ordinal:    `pymmeans.ordinal_emmeans(fit, ..., "
+                "mode='mean.class')`\n"
+                "  - Multinomial: `pymmeans.multinom_emmeans(fit, ..., "
+                "mode='prob')` then summarise the per-category posterior."
+            )
+        else:
+            raise ValueError(
+                f"Unknown mode={mode!r}. Supported R-style names: "
+                "'latent' / 'linear.predictor' / 'link' (= type='link'); "
+                "'response' / 'prob' / 'mean' (= type='response'); "
+                "'mean.class' (use ordinal_emmeans / multinom_emmeans)."
+            )
 
     # #7: validate type just like emmeans() does — otherwise
     # `type='foo'` flows through and downstream code sees an invalid tag.
@@ -370,16 +431,34 @@ def from_pymc(
     data: pd.DataFrame,
     var_name: str = "beta",
 ) -> PosteriorInfo:
-    """Build a :class:`PosteriorInfo` from a PyMC fit.
+    """Build a :class:`PosteriorInfo` from an arviz :class:`InferenceData`.
+
+    Despite the historical name, this function is framework-agnostic:
+    it accepts any arviz ``InferenceData`` object with a ``posterior``
+    group, regardless of which MCMC engine produced it. PyMC, numpyro,
+    blackjax, cmdstanpy / Stan, TFP, and pyro all expose arviz
+    converters (``arviz.from_pymc``, ``arviz.from_numpyro``,
+    ``arviz.from_cmdstanpy``, ``arviz.from_pyro``, etc.) — convert
+    your fit to InferenceData via the appropriate converter, then
+    pass it here.
+
+    See :func:`from_arviz` for the framework-neutral alias.
 
     Lazy-imports arviz; raises ``ImportError`` if arviz isn't available.
 
     Parameters
     ----------
     idata
-        An arviz :class:`InferenceData` object (PyMC's ``idata`` from
-        ``pm.sample``). Must contain a posterior group with the
-        fixed-effect coefficients under ``var_name``.
+        An arviz :class:`InferenceData` object. Must contain a
+        ``posterior`` group with the fixed-effect coefficients under
+        ``var_name``. Sources include (non-exhaustive):
+
+        - PyMC: ``pm.sample(..., return_inferencedata=True)``
+        - numpyro: ``arviz.from_numpyro(mcmc)``
+        - blackjax: ``arviz.from_blackjax(states, ...)``
+        - cmdstanpy / Stan: ``arviz.from_cmdstanpy(fit)``
+        - pyro: ``arviz.from_pyro(mcmc)``
+
     formula
         The patsy formula used to build the design matrix. pymmeans
         rebuilds the design via patsy on ``data`` so we get factor
@@ -568,3 +647,14 @@ def from_pymc(
         estimability_basis=_build_estimability_basis(X),
     )
     return PosteriorInfo(beta_samples=samples, model_info=info)
+
+
+# Framework-neutral alias.
+# ``from_pymc`` is purely arviz-based — it never touches PyMC's API. The
+# function name is historical: it was added when PyMC was the only
+# supported source. Any MCMC engine that ships an arviz converter
+# (numpyro, blackjax, cmdstanpy / Stan, pyro, TFP, ...) produces an
+# InferenceData that flows through unchanged. ``from_arviz`` is the
+# name that reflects what the function actually does; ``from_pymc``
+# is retained as an alias so existing user code keeps working.
+from_arviz = from_pymc

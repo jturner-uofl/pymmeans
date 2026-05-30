@@ -84,7 +84,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `rbind(c1, c2, ..., adjust=)` | ✅ Full | Concatenates `ContrastResult`s and applies a joint multiplicity adjustment over the combined family |
 | `emm_list` | ✅ Full | `EmmList` named / positional container; `summary` / `confint` / `test` recurse; `as_r_frame(EmmList)` combines members into one DataFrame |
 | `as.glht()` / `as.mcmc()` / `hpd.summary()` | ❌ Missing | R-specific adapters |
-| `mvcontrast()` / `mvregrid()` | ❌ Missing | Needs multivariate-response architecture |
+| `mvcontrast()` | ✅ Full | `pymmeans.mvcontrast` on a `MultivariateEMM` from `multivariate_emmeans(_MultivariateOLSResults, …)`; Hotelling T² / F per between-contrast, Sidak default; matches R machine-precision (see jss_audit §VII.5). `mvregrid()` still missing. |
 | `add_grouping`, `comb_facs`, `split_fac`, `permute_levels` | ❌ Missing | Grid manipulation utilities |
 | `nesting`, `nuisance`, `counterfactuals` | ❌ Missing | High-value ref-grid features |
 

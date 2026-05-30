@@ -7,17 +7,28 @@ from pymmeans.adapters import (
     register_adapter,
 )
 from pymmeans.adjustments import adjust_pvalues
+from pymmeans.aft import from_aft
 from pymmeans.cld import cld
 from pymmeans.contrasts import (
+    CONTRAST_METHODS,
     ContrastResult,
     EmmList,
     contrast,
     effect_size,
+    opoly,
     pairs,
     rbind,
+    register_contrast_method,
 )
 from pymmeans.diagnostics import Check, HealthReport, health_check
 from pymmeans.emmeans import EMMResult, emmeans
+from pymmeans.grid_ops import (
+    add_grouping,
+    comb_facs,
+    force_regular,
+    permute_levels,
+    split_fac,
+)
 from pymmeans.joint import eta_squared, joint_tests
 from pymmeans.ml import (
     MLEMMResult,
@@ -28,6 +39,13 @@ from pymmeans.ml import (
     ml_pairs,
 )
 from pymmeans.multinom import multinom_emmeans
+from pymmeans.multivariate import (
+    MultivariateEMM,
+    MultivariateInfo,
+    from_multivariate,
+    multivariate_emmeans,
+    mvcontrast,
+)
 from pymmeans.options import (
     emm_options,
     get_emm_option,
@@ -47,6 +65,7 @@ from pymmeans.pbmodcomp import PBmodcompResult, pbmodcomp
 from pymmeans.plotting import emmip, plot, pwpp
 from pymmeans.posterior import (
     PosteriorInfo,
+    from_arviz,
     from_pymc,
     posterior_emm_summary,
     posterior_emmeans,
@@ -71,15 +90,22 @@ from pymmeans.summary_layer import (
 )
 from pymmeans.survey import SurveyDesign, design_corrected_vcov, from_survey
 from pymmeans.transforms import (
+    TRANSFORMS,
     NonLogContrastBiasAdjustError,
     Transform,
     detect_transform,
     make_tran,
+    register_transform,
     regrid,
     regrid_response,
 )
 from pymmeans.trends import emtrends
-from pymmeans.utils import from_fitted, from_linearmodels, from_statsmodels
+from pymmeans.utils import (
+    from_fitted,
+    from_glmgam,
+    from_linearmodels,
+    from_statsmodels,
+)
 
 # R `lsmeans` package backward-compat aliases.
 #
@@ -106,9 +132,11 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.1.8"
+__version__ = "0.2.0"
 
 __all__ = [
+    "CONTRAST_METHODS",
+    "TRANSFORMS",
     "BoundaryFitError",
     "Check",
     "ContrastResult",
@@ -121,6 +149,8 @@ __all__ = [
     "MLEMMResult",
     "MLPredictInfo",
     "ModelAdapter",
+    "MultivariateEMM",
+    "MultivariateInfo",
     "NonLogContrastBiasAdjustError",
     "PBmodcompResult",
     "PosteriorInfo",
@@ -129,12 +159,14 @@ __all__ = [
     "SurveyDesign",
     "Transform",
     "__version__",
+    "add_grouping",
     "adjust_pvalues",
     "apply_kenward_roger",
     "apply_satterthwaite",
     "as_r_frame",
     "bootstrap_ci",
     "cld",
+    "comb_facs",
     "confint",
     "contrast",
     "ddf_lb",
@@ -147,8 +179,13 @@ __all__ = [
     "emmobj",
     "emtrends",
     "eta_squared",
+    "force_regular",
+    "from_aft",
+    "from_arviz",
     "from_fitted",
+    "from_glmgam",
     "from_linearmodels",
+    "from_multivariate",
     "from_predict",
     "from_pymc",
     "from_statsmodels",
@@ -170,10 +207,14 @@ __all__ = [
     "ml_emmeans",
     "ml_pairs",
     "multinom_emmeans",
+    "multivariate_emmeans",
+    "mvcontrast",
+    "opoly",
     "ordinal_emmeans",
     "pairs",
     "pbmodcomp",
     "permutation_test",
+    "permute_levels",
     "plot",
     "posterior_emm_summary",
     "posterior_emmeans",
@@ -183,12 +224,15 @@ __all__ = [
     "rbind",
     "ref_grid",
     "register_adapter",
+    "register_contrast_method",
+    "register_transform",
     "regrid",
     "regrid_response",
     "reset_emm_options",
     "satmodcomp",
     "satterthwaite_df",
     "set_emm_options",
+    "split_fac",
     "summary",
     "test",
     "update",

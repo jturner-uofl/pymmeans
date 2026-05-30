@@ -79,6 +79,17 @@ class _SattCache(NamedTuple):
     y: np.ndarray
     groups: np.ndarray
     group_ids: np.ndarray
+    # vc_formula= support. ``theta_vc_hat`` holds
+    # sqrt(vcomp_v / sigma_sq) for each variance component (the lmer
+    # relative-covariance-factor of each scalar VC). ``vc_mats`` is a
+    # tuple of length ``k_vc``; each element is a dict
+    # ``{group_id: design_matrix}`` carrying that VC's per-group design
+    # block (from statsmodels ``model.exog_vc.mats``). Defaults make
+    # the cov_re-only path byte-identical to the pre-vc_formula
+    # behaviour (k_vc=0 → no VC blocks added anywhere).
+    theta_vc_hat: np.ndarray = np.empty(0)
+    k_vc: int = 0
+    vc_mats: tuple[dict, ...] = ()
 
 
 class KRInternals(NamedTuple):
@@ -129,6 +140,7 @@ class KRInternals(NamedTuple):
 def _build_satt_cache(result: Any) -> _SattCache:
     """Snapshot the REML state from a fitted MixedLM result."""
     theta_lmer_hat, k_re = _lmer_theta_hat(result)
+    theta_vc_hat, k_vc, vc_mats = _lmer_vc_theta_hat(result)
     sigma_sq_hat = float(result.scale)
     X = np.asarray(result.model.exog, dtype=float)
     Z = np.asarray(result.model.exog_re, dtype=float)
@@ -144,6 +156,9 @@ def _build_satt_cache(result: Any) -> _SattCache:
         y=y,
         groups=groups,
         group_ids=group_ids,
+        theta_vc_hat=theta_vc_hat,
+        k_vc=int(k_vc),
+        vc_mats=vc_mats,
     )
 
 
@@ -233,6 +248,77 @@ def _lmer_theta_hat(result: Any) -> tuple[np.ndarray, int]:
     return _vech_lower(Lambda), G_unscaled.shape[0]
 
 
+def _lmer_vc_theta_hat(
+    result: Any,
+) -> tuple[np.ndarray, int, tuple[dict, ...]]:
+    """Extract the variance-component (``vc_formula=``) state.
+
+    Returns ``(theta_vc_hat, k_vc, vc_mats)`` where:
+
+    - ``theta_vc_hat`` is ``sqrt(vcomp_v / sigma_sq)`` for each scalar
+      variance component (the lmer relative-covariance factor of a
+      1×1 block).
+    - ``k_vc`` is the number of variance components.
+    - ``vc_mats`` is a tuple of length ``k_vc``; each element is a
+      dict ``{group_id: design_matrix}`` mapping every group label to
+      that VC's per-group design block (from
+      ``model.exog_vc.mats[v]``, which is indexed by
+      ``model.group_labels`` order — we re-key by the actual label so
+      the deviance loop can look it up regardless of group ordering).
+
+    Returns ``(empty, 0, ())`` for a model with no ``vc_formula=``.
+    """
+    model = getattr(result, "model", None)
+    k_vc = int(getattr(model, "k_vc", 0) or 0)
+    if not k_vc:
+        return np.empty(0), 0, ()
+    scale = float(result.scale)
+    vcomp = np.asarray(result.vcomp, dtype=float)
+    # vcomp can be exactly 0 at the boundary; clip the ratio at 0 so
+    # the sqrt is well-defined (the boundary check downstream handles
+    # the near-zero case).
+    theta_vc = np.sqrt(np.maximum(vcomp / scale, 0.0))
+
+    exog_vc = model.exog_vc
+    group_labels = list(model.group_labels)
+    # mats[v] is a list indexed by group order; build {group_id: mat}.
+    vc_mats: list[dict] = []
+    for v in range(k_vc):
+        per_group = exog_vc.mats[v]
+        d: dict = {}
+        for gi, g_lab in enumerate(group_labels):
+            d[g_lab] = np.asarray(per_group[gi], dtype=float)
+        vc_mats.append(d)
+    return theta_vc, k_vc, tuple(vc_mats)
+
+
+def _vc_cov_block(
+    vc_mats: tuple[dict, ...],
+    g_id: Any,
+    theta_vc: np.ndarray,
+    sigma_sq: float,
+    n_i: int,
+) -> np.ndarray:
+    """Sum the per-group variance-component covariance contribution.
+
+    Returns ``sum_v vcomp_v · (Z_vc · Z_vc')`` for group ``g_id`` in
+    ABSOLUTE units, where ``vcomp_v = theta_vc[v]**2 · sigma_sq``
+    (matching the absolute-unit ``V_i`` the REML / V_beta builders
+    use). Returns an ``(n_i, n_i)`` zero matrix when there are no
+    variance components. Groups absent from a VC's design map (no
+    levels of that VC present in the group) contribute nothing.
+    """
+    out = np.zeros((n_i, n_i))
+    if not vc_mats:
+        return out
+    for v, mats_v in enumerate(vc_mats):
+        Zvc = mats_v.get(g_id)
+        if Zvc is None or Zvc.size == 0:
+            continue
+        out = out + (theta_vc[v] ** 2 * sigma_sq) * (Zvc @ Zvc.T)
+    return out
+
+
 def _reml_deviance(
     model: Any,
     theta_lmer: np.ndarray,
@@ -243,9 +329,14 @@ def _reml_deviance(
     y: np.ndarray,
     groups: np.ndarray,
     group_ids: np.ndarray,
+    theta_vc: np.ndarray | None = None,
+    vc_mats: tuple[dict, ...] = (),
 ) -> float:
-    """REML deviance at (theta_lmer, sigma_sq). Used for finite-difference
-    Hessian to recover Cov(theta_lmer, sigma_sq) in lmer's parametrisation."""
+    """REML deviance at (theta_lmer, theta_vc, sigma_sq). Used for finite-
+    difference Hessian to recover Cov(theta, sigma_sq) in lmer's
+    parametrisation. ``theta_vc`` / ``vc_mats`` add the ``vc_formula=``
+    variance-component blocks to each per-group ``V_i``; both default to
+    empty (the cov_re-only path is unchanged)."""
     Lambda = _lmer_theta_to_lambda(theta_lmer, k_re)
     G = Lambda @ Lambda.T * sigma_sq
     n_p = X.shape[1]
@@ -254,10 +345,13 @@ def _reml_deviance(
     XtVinvy = np.zeros(n_p)
     for g_id in group_ids:
         m = groups == g_id
+        n_i = int(m.sum())
         X_i = X[m]
         Z_i = Z[m]
         y_i = y[m]
-        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(m.sum())
+        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(n_i)
+        if vc_mats:
+            V_i = V_i + _vc_cov_block(vc_mats, g_id, theta_vc, sigma_sq, n_i)
         V_i_inv = np.linalg.inv(V_i)
         _, ldet = np.linalg.slogdet(V_i)
         log_det_V_sum += ldet
@@ -268,10 +362,13 @@ def _reml_deviance(
     resid_sq = 0.0
     for g_id in group_ids:
         m = groups == g_id
+        n_i = int(m.sum())
         X_i = X[m]
         Z_i = Z[m]
         y_i = y[m]
-        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(m.sum())
+        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(n_i)
+        if vc_mats:
+            V_i = V_i + _vc_cov_block(vc_mats, g_id, theta_vc, sigma_sq, n_i)
         V_i_inv = np.linalg.inv(V_i)
         r = y_i - X_i @ beta_hat
         resid_sq += r @ V_i_inv @ r
@@ -287,17 +384,26 @@ def _vbeta_at_lmer(
     Z: np.ndarray,
     groups: np.ndarray,
     group_ids: np.ndarray,
+    theta_vc: np.ndarray | None = None,
+    vc_mats: tuple[dict, ...] = (),
 ) -> np.ndarray:
-    """V_beta at (theta_lmer, sigma_sq) in lmer's parametrisation."""
+    """V_beta at (theta_lmer, theta_vc, sigma_sq) in lmer's parametrisation.
+
+    ``theta_vc`` / ``vc_mats`` add the ``vc_formula=`` variance-component
+    blocks to each per-group ``V_i``; both default to empty (the
+    cov_re-only path is unchanged)."""
     Lambda = _lmer_theta_to_lambda(theta_lmer, k_re)
     G = Lambda @ Lambda.T * sigma_sq
     n_p = X.shape[1]
     A = np.zeros((n_p, n_p))
     for g_id in group_ids:
         m = groups == g_id
+        n_i = int(m.sum())
         X_i = X[m]
         Z_i = Z[m]
-        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(m.sum())
+        V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(n_i)
+        if vc_mats:
+            V_i = V_i + _vc_cov_block(vc_mats, g_id, theta_vc, sigma_sq, n_i)
         A += X_i.T @ np.linalg.inv(V_i) @ X_i
     return np.linalg.inv(A)
 
@@ -329,12 +435,16 @@ def _satterthwaite_df_lmer(
         y = cache.y
         groups = cache.groups
         group_ids = cache.group_ids
+        theta_vc_hat = cache.theta_vc_hat
+        k_vc = cache.k_vc
+        vc_mats = cache.vc_mats
         model_handle: Any = None # not used by _reml_deviance / _vbeta_at_lmer
     else:
         result = info.raw_result
         if result is None or not hasattr(result, "cov_re"):
             return np.full(L.shape[0], np.inf)
         theta_lmer_hat, k_re = _lmer_theta_hat(result)
+        theta_vc_hat, k_vc, vc_mats = _lmer_vc_theta_hat(result)
         sigma_sq_hat = float(result.scale)
         X = np.asarray(result.model.exog, dtype=float)
         Z = np.asarray(result.model.exog_re, dtype=float)
@@ -343,12 +453,26 @@ def _satterthwaite_df_lmer(
         group_ids = np.unique(groups)
         model_handle = result.model
 
-    full_theta = np.concatenate([theta_lmer_hat, [sigma_sq_hat]])
+    # augmented θ ordering [theta_re, theta_vc, sigma_sq].
+    # theta_vc is empty for cov_re-only fits, so this collapses to the
+    # original [theta_re, sigma_sq] packing.
+    n_re2 = len(theta_lmer_hat)
+    full_theta = np.concatenate(
+        [theta_lmer_hat, theta_vc_hat, [sigma_sq_hat]]
+    )
     n_theta = len(full_theta)
 
+    def _unpack(vec: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        theta_re = vec[:n_re2]
+        theta_vc = vec[n_re2:n_re2 + k_vc]
+        sig = float(vec[-1])
+        return theta_re, theta_vc, sig
+
     def deviance(vec: np.ndarray) -> float:
+        tr, tv, sig = _unpack(vec)
         return _reml_deviance(
-            model_handle, vec[:-1], vec[-1], k_re, X, Z, y, groups, group_ids
+            model_handle, tr, sig, k_re, X, Z, y, groups, group_ids,
+            theta_vc=tv, vc_mats=vc_mats,
         )
 
     # Central-difference Hessian. Step sized per parameter scale.
@@ -380,10 +504,12 @@ def _satterthwaite_df_lmer(
     except np.linalg.LinAlgError:
         return np.full(L.shape[0], np.inf)
 
-    # Gradient of c'V_b c w.r.t. (theta_lmer, sigma_sq)
+    # Gradient of c'V_b c w.r.t. (theta_lmer, theta_vc, sigma_sq)
     def cVc_at(vec: np.ndarray) -> np.ndarray:
+        tr, tv, sig = _unpack(vec)
         Vb = _vbeta_at_lmer(
-            model_handle, vec[:-1], vec[-1], k_re, X, Z, groups, group_ids
+            model_handle, tr, sig, k_re, X, Z, groups, group_ids,
+            theta_vc=tv, vc_mats=vc_mats,
         )
         return np.einsum("ij,jk,ik->i", L, Vb, L)
 
@@ -454,19 +580,11 @@ def satterthwaite_df(
             stacklevel=2,
         )
         return np.full(L.shape[0], np.inf)
-    # #3: vc_formula= MixedLMs put extra variance components
-    # outside cov_re (k_re=0, k_vc>0), and our lmer-parametrisation rewrite
-    # only knows about cov_re. Raise cleanly so the user knows we don't
-    # yet support these.
-    k_vc = getattr(getattr(result, "model", None), "k_vc", 0)
-    if k_vc:
-        raise NotImplementedError(
-            f"Satterthwaite df for MixedLM with vc_formula= ({k_vc} variance "
-            "components outside cov_re) is not yet supported. Refit with "
-            "all random effects in re_formula= (i.e. nested in cov_re), "
-            "or fall through to Wald inference by calling emmeans() "
-            "directly without apply_satterthwaite()."
-        )
+    # ``vc_formula=`` variance components (``model.k_vc > 0``) are now
+    # supported: they enter the augmented lmer θ as scalar relative-
+    # covariance factors ``sqrt(vcomp_v / sigma_sq)`` and add their
+    # design blocks to each per-group ``V_i``. See
+    # :func:`_lmer_vc_theta_hat` / :func:`_vc_cov_block`.
     return _satterthwaite_df_lmer(info, L)
 
 
@@ -578,6 +696,9 @@ def kenward_roger_vcov(
         Z = cache.Z
         groups = cache.groups
         group_ids = cache.group_ids
+        theta_vc_hat = cache.theta_vc_hat
+        k_vc = cache.k_vc
+        vc_mats = cache.vc_mats
     else:
         if not info.is_mixed or info.raw_result is None or not hasattr(
             info.raw_result, "cov_re"
@@ -587,14 +708,8 @@ def kenward_roger_vcov(
                 "ModelInfo, or a pre-built _SattCache."
             )
         result = info.raw_result
-        k_vc = getattr(getattr(result, "model", None), "k_vc", 0)
-        if k_vc:
-            raise NotImplementedError(
-                f"Kenward-Roger for MixedLM with vc_formula= ({k_vc} variance "
-                "components outside cov_re) is not yet supported. Refit with "
-                "all random effects in re_formula=, or use Wald inference."
-            )
         theta_lmer_hat, k_re = _lmer_theta_hat(result)
+        theta_vc_hat, k_vc, vc_mats = _lmer_vc_theta_hat(result)
         sigma_sq_hat = float(result.scale)
         X = np.asarray(result.model.exog, dtype=float)
         Z = np.asarray(result.model.exog_re, dtype=float)
@@ -602,10 +717,20 @@ def kenward_roger_vcov(
         group_ids = np.unique(groups)
 
     Lambda = _lmer_theta_to_lambda(theta_lmer_hat, k_re)
-    if np.any(np.diag(Lambda) <= _KR_BOUNDARY_TOL):
+    if k_re and np.any(np.diag(Lambda) <= _KR_BOUNDARY_TOL):
         raise BoundaryFitError(
             "Kenward-Roger cannot be computed at boundary variance "
             f"components (Lambda diagonal = {np.diag(Lambda).tolist()}). "
+            "Use apply_satterthwaite() instead, or refit with a "
+            "non-boundary model."
+        )
+    # Variance components also have a boundary (vcomp_v -> 0 ⇒
+    # theta_vc_v -> 0); the finite-difference KR second derivatives are
+    # meaningless there.
+    if k_vc and np.any(theta_vc_hat <= _KR_BOUNDARY_TOL):
+        raise BoundaryFitError(
+            "Kenward-Roger cannot be computed at boundary variance "
+            f"components (sqrt(vcomp/sigma^2) = {theta_vc_hat.tolist()}). "
             "Use apply_satterthwaite() instead, or refit with a "
             "non-boundary model."
         )
@@ -638,8 +763,17 @@ def kenward_roger_vcov(
     # the same cost as the pre-implementation but produces the
     # full-precision pbkrtest answer.
 
-    def build_V_groups(theta_lmer: np.ndarray, sigma_sq: float) -> list[np.ndarray]:
-        """Build per-group marginal covariance matrices V_g."""
+    # augmented θ ordering [theta_re, theta_vc, sigma_sq].
+    n_re2 = len(theta_lmer_hat)
+
+    def build_V_groups(
+        theta_lmer: np.ndarray, theta_vc: np.ndarray, sigma_sq: float
+    ) -> list[np.ndarray]:
+        """Build per-group marginal covariance matrices V_g.
+
+        Adds the ``vc_formula=`` variance-component blocks
+        ``sum_v vcomp_v · Zvc Zvc'`` when present (``vc_mats`` non-empty).
+        """
         Lam = _lmer_theta_to_lambda(theta_lmer, k_re)
         G = Lam @ Lam.T * sigma_sq
         Vs: list[np.ndarray] = []
@@ -648,14 +782,23 @@ def kenward_roger_vcov(
             Z_i = Z[m]
             n_i = int(m.sum())
             V_i = Z_i @ G @ Z_i.T + sigma_sq * np.eye(n_i)
+            if vc_mats:
+                V_i = V_i + _vc_cov_block(
+                    vc_mats, g_id, theta_vc, sigma_sq, n_i
+                )
             Vs.append(V_i)
         return Vs
 
-    full_theta = np.concatenate([theta_lmer_hat, [sigma_sq_hat]])
+    full_theta = np.concatenate(
+        [theta_lmer_hat, theta_vc_hat, [sigma_sq_hat]]
+    )
     n_theta = len(full_theta)
     h = np.maximum(np.abs(full_theta), 1e-6) * 1e-4
 
-    V_groups = build_V_groups(theta_lmer_hat, sigma_sq_hat)
+    def _split(vec: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        return vec[:n_re2], vec[n_re2:n_re2 + k_vc], float(vec[-1])
+
+    V_groups = build_V_groups(theta_lmer_hat, theta_vc_hat, sigma_sq_hat)
     SigmaInv_groups = [np.linalg.inv(V_g) for V_g in V_groups]
 
     # Pre-extract per-group X slices (used everywhere downstream).
@@ -679,8 +822,10 @@ def kenward_roger_vcov(
     for r in range(n_theta):
         vec_p = full_theta.copy(); vec_p[r] += h[r]
         vec_m = full_theta.copy(); vec_m[r] -= h[r]
-        Vp = build_V_groups(vec_p[:-1], vec_p[-1])
-        Vm = build_V_groups(vec_m[:-1], vec_m[-1])
+        tr_p, tv_p, ss_p = _split(vec_p)
+        tr_m, tv_m, ss_m = _split(vec_m)
+        Vp = build_V_groups(tr_p, tv_p, ss_p)
+        Vm = build_V_groups(tr_m, tv_m, ss_m)
         V_r_groups_list.append(
             [(Vp[g] - Vm[g]) / (2.0 * h[r]) for g in range(n_groups)]
         )
@@ -1023,10 +1168,10 @@ def apply_satterthwaite(emm_or_contrast: Any) -> Any:
         and hasattr(info.raw_result, "cov_re")
     ):
         # Only build cache for MixedLM with random effects; OLS / GLM
-        # don't need it (df is df_resid / inf).
-        k_vc = getattr(getattr(info.raw_result, "model", None), "k_vc", 0)
-        if not k_vc:
-            cache = _build_satt_cache(info.raw_result)
+        # don't need it (df is df_resid / inf). vc_formula= MixedLMs
+        # (k_vc > 0) are now supported and DO need the cache (it carries
+        # the VC design blocks + relative-covariance factors).
+        cache = _build_satt_cache(info.raw_result)
     df = satterthwaite_df(info, emm_or_contrast.linfct, cache=cache)
     # Use the original V_beta (no KR inflation here)
     V_beta = info.vcov
@@ -1134,21 +1279,11 @@ def apply_kenward_roger(emm_or_contrast: Any) -> Any:
             "`apply_satterthwaite()` instead."
         )
 
-    # #3: refuse vc_formula= MixedLMs early. These put
-    # extra variance components outside cov_re (k_re may be 0 with
-    # k_vc > 0), which the lmer-parametrisation K-R / Satt rewrites
-    # don't support. lifted the in-body k_vc check from
-    # apply_kenward_roger; restore it here so the refusal fires
-    # before _lmer_theta_hat tries to slice cov_re.
-    if info.raw_result is not None:
-        k_vc = getattr(getattr(info.raw_result, "model", None), "k_vc", 0)
-        if k_vc:
-            raise NotImplementedError(
-                f"Kenward-Roger for MixedLM with vc_formula= ({k_vc} "
-                "variance components outside cov_re) is not yet "
-                "supported. Refit with all random effects in "
-                "re_formula=, or use Wald inference."
-            )
+    # ``vc_formula=`` variance components are now supported by the
+    # Kenward-Roger path: they enter the augmented lmer θ as scalar
+    # relative-covariance factors and add their design blocks to each
+    # per-group ``V_g`` in :func:`kenward_roger_vcov`'s
+    # ``build_V_groups``.
 
     # reuse / populate the pickle-safe REML cache so KR
     # round-trips through pickle just like Satt does.

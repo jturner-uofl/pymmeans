@@ -41,11 +41,58 @@ def _require_matplotlib():
     return plt
 
 
+def _prediction_interval_bounds(
+    emm: EMMResult, level: float
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Per-row prediction-interval bounds for a forest / interaction plot.
+
+    Returns ``(pi_lower, pi_upper)`` or ``(None, None)``. Mirrors R
+    ``plot.emmGrid(PIs=TRUE)`` / ``emmip(PIs=TRUE)``:
+
+    * OLS (no GLM family): ``PI = emmean ± qt(level, df) · sqrt(SE² +
+      σ²)`` where ``σ²`` is the residual variance (``info.scale``).
+      The per-row SE is backed out of the stored CI half-width so the
+      same df / multiplier convention is reused.
+    * GLM family: residual variance on the link scale isn't well-
+      defined, so R refuses PIs and warns. We mirror that — warn and
+      return ``(None, None)``.
+    """
+    if emm.model_info.family is not None:
+        import warnings as _w
+        _w.warn(
+            "Prediction intervals are not available for this object",
+            UserWarning,
+            stacklevel=3,
+        )
+        return None, None
+    from scipy import stats as _stats
+
+    sigma2 = float(getattr(emm.model_info, "scale", 0.0) or 0.0)
+    frame = emm.frame
+    half = (
+        frame["upper_cl"].to_numpy() - frame["lower_cl"].to_numpy()
+    ) / 2.0
+    df_arr = frame["df"].to_numpy(dtype=float)
+    crit = _stats.t.ppf(0.5 + level / 2.0, df_arr)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        SE = np.where(crit > 0, half / crit, half)
+    pi_half = crit * np.sqrt(SE ** 2 + sigma2)
+    emm_vals = frame["emmean"].to_numpy()
+    return emm_vals - pi_half, emm_vals + pi_half
+
+
 def plot(
     emm: EMMResult,
     ax: Axes | None = None,
     ref_line: float | None = None,
-) -> Axes:
+    *,
+    sep: str | None = None,
+    comparisons: bool = False,
+    comparison_level: float = 0.95,
+    comparison_adjust: str = "tukey",
+    PIs: bool = False,
+    level: float = 0.95,
+) -> Axes | np.ndarray:
     """Forest plot of EMMs with confidence intervals.
 
     Parameters
@@ -53,12 +100,83 @@ def plot(
     emm
         Result from ``emmeans(...)``.
     ax
-        Optional existing matplotlib Axes; a new figure is created otherwise.
+        Optional existing matplotlib Axes; a new figure is created
+        otherwise. Ignored when ``sep=`` is set (the function
+        creates a fresh grid of facet Axes).
     ref_line
-        Optional x-value at which to draw a vertical reference line (e.g. 0 to
-        flag "no effect" or 0.5 for response-scale binomial).
+        Optional x-value at which to draw a vertical reference line
+        (e.g. 0 to flag "no effect" or 0.5 for response-scale
+        binomial).
+    sep
+        Optional factor name. When supplied, the forest plot is
+        split into one Axes per unique level of ``sep``; the function
+        returns a 1-D ``np.ndarray`` of Axes objects (one per panel)
+        instead of a single Axes. The named factor must be a column
+        in ``emm.frame`` AND must currently appear in
+        ``emm.target + emm.by``. The factor is removed from the row
+        labels of each panel (the panel header carries the value).
+    comparisons
+        When ``True``, overlay pairwise-comparison "arrows" on each
+        EMM in addition to the standard CI bars. Each arrow's
+        half-width is sized so that two arrows overlap iff the
+        corresponding pair is **not** significantly different at
+        ``comparison_level`` under ``comparison_adjust``. Mirrors R
+        ``plot.emmGrid(..., comparisons=TRUE)``. Drawn in a
+        contrasting style above (or, when arrows would overlap the
+        CI, below) the CI bar.
+
+        Implementation note: the half-width is computed as
+        ``c_i = q · SE_i / sqrt(2)`` where ``q`` is the studentised
+        critical value at the requested level + adjustment. This
+        produces the symmetric Gabriel-style comparison interval —
+        easy to verify, slightly conservative versus R's exact
+        asymmetric solve, but the overlap-iff-nonsignificant
+        interpretation holds for the balanced case. R's exact
+        asymmetric arrows are a 0.2.0 candidate.
+    comparison_level
+        Confidence level for the overlap test. Default 0.95.
+    comparison_adjust
+        Multiplicity adjustment driving the critical value for the
+        overlap test. ``"tukey"`` (default) matches R's
+        plot.emmGrid behaviour; ``"none"`` produces unadjusted
+        per-pair intervals; ``"bonferroni"`` / ``"sidak"`` are
+        accepted as conservative alternatives.
+    PIs
+        When ``True``, overlay a wider **prediction interval** band
+        (``emmean ± qt(level, df) · sqrt(SE² + σ²)``, ``σ²`` =
+        residual variance) behind the CI bars. Mirrors R
+        ``plot.emmGrid(PIs = TRUE)``. Refused (with a warning, like R)
+        on GLM fits where a link-scale residual variance isn't
+        well-defined.
+    level
+        Confidence level for the prediction-interval band. Default
+        0.95. (The CI bars use the EMM's own stored ``level``.)
+
+    Returns
+    -------
+    Axes | ndarray of Axes
+        A single Axes when ``sep`` is ``None``; otherwise a 1-D
+        ndarray of Axes (one per facet).
     """
     plt = _require_matplotlib()
+
+    # ``sep`` short-circuit: facet split. Each facet calls back
+    # into ``plot`` recursively with the row-subset EMMResult,
+    # ``sep=None``, and the same ``comparisons`` / ``ref_line``
+    # settings — so the comparison-arrow code below only runs in
+    # the non-faceted branch (and per-facet recursively).
+    if sep is not None:
+        return _plot_faceted(
+            emm,
+            sep=sep,
+            ref_line=ref_line,
+            comparisons=comparisons,
+            comparison_level=comparison_level,
+            comparison_adjust=comparison_adjust,
+            PIs=PIs,
+            level=level,
+        )
+
     if ax is None:
         _, ax = plt.subplots(figsize=(7, max(3.0, len(emm.frame) * 0.35)))
 
@@ -72,6 +190,22 @@ def plot(
     lo = emm.frame["lower_cl"].to_numpy()
     hi = emm.frame["upper_cl"].to_numpy()
 
+    # Prediction-interval band (drawn FIRST so the CI bar sits on top).
+    if PIs:
+        pi_lo, pi_hi = _prediction_interval_bounds(emm, level)
+        if pi_lo is not None:
+            ax.errorbar(
+                means,
+                y_pos,
+                xerr=[means - pi_lo, pi_hi - means],
+                fmt="none",
+                capsize=7,
+                elinewidth=1.0,
+                color="C0",
+                alpha=0.35,
+                label="PI",
+            )
+
     ax.errorbar(
         means,
         y_pos,
@@ -79,14 +213,43 @@ def plot(
         fmt="o",
         capsize=4,
         color="C0",
+        label="CI",
     )
+    if PIs:
+        ax.legend(loc="best", fontsize="small", frameon=False)
+
+    # Pairwise-comparison arrows overlay. Half-width formula:
+    # c_i = q · SE_i / sqrt(2). Two arrows overlap iff
+    # |mu_i - mu_j| < (c_i + c_j) = q · (SE_i + SE_j) / sqrt(2),
+    # which is the Gabriel-style approximation to "pair (i, j) is
+    # not significantly different at level alpha under the chosen
+    # adjustment". For balanced designs and Tukey adjustment this
+    # is essentially R's plot.emmGrid output; for unbalanced designs
+    # the symmetric formula is slightly conservative versus R's
+    # exact asymmetric solve (the visual interpretation —
+    # "overlapping = not significantly different" — holds in either
+    # case).
+    if comparisons:
+        _overlay_comparison_arrows(
+            ax,
+            emm,
+            means=means,
+            y_pos=y_pos,
+            level=comparison_level,
+            adjust=comparison_adjust,
+        )
+        # Add a tiny legend marker for the arrow series so a viewer
+        # can distinguish CI bars (the wider segment) from
+        # comparison arrows (the narrower one). Use the default
+        # matplotlib legend; only render when there's something to
+        # show beyond the single ``errorbar`` call.
+        ax.legend(loc="best", fontsize="small", frameon=False)
+
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
     ax.invert_yaxis()
     scale = "response" if emm.type == "response" else "link"
     pct = round(emm.level * 100)
-    # #6: label posterior intervals as credible (CrI),
-    # not confidence (CI), to match their actual semantics.
     interval = (
         "CrI"
         if getattr(emm, "inference_kind", "wald") == "posterior"
@@ -98,6 +261,189 @@ def plot(
         ax.axvline(ref_line, color="red", linestyle="--", alpha=0.5)
 
     return ax
+
+
+def _plot_faceted(
+    emm: EMMResult,
+    *,
+    sep: str,
+    ref_line: float | None,
+    comparisons: bool,
+    comparison_level: float,
+    comparison_adjust: str,
+    PIs: bool = False,
+    level: float = 0.95,
+) -> np.ndarray:
+    """Split the forest plot into facets by the named factor."""
+    plt = _require_matplotlib()
+    from dataclasses import replace as _dc_replace
+
+    import pandas as pd
+
+    if not isinstance(sep, str) or not sep:
+        raise ValueError(
+            "plot(sep=...) must be a non-empty string naming a "
+            "factor column in emm.frame."
+        )
+    if sep not in emm.frame.columns:
+        raise ValueError(
+            f"plot(sep={sep!r}): column not present in emm.frame. "
+            f"Available columns: {list(emm.frame.columns)}."
+        )
+    # ``sep`` should genuinely be a target / by factor — otherwise
+    # we'd be slicing on something that doesn't vary across grid
+    # rows in a meaningful way (each row would be its own facet).
+    sep_dims = emm.target + emm.by
+    if sep not in sep_dims:
+        raise ValueError(
+            f"plot(sep={sep!r}): the facet column must appear in "
+            f"emm.target or emm.by (current dimensions: {sep_dims}). "
+            f"Got a non-dimension column; that would produce one row "
+            "per facet which isn't useful."
+        )
+    # Discover the levels in the column's natural order (Categorical
+    # cat.categories if present, else first-occurrence).
+    col = emm.frame[sep]
+    if isinstance(col.dtype, pd.CategoricalDtype):
+        levels = [lv for lv in col.cat.categories if lv in set(col)]
+    else:
+        levels = list(pd.unique(col))
+    if not levels:
+        raise ValueError(
+            f"plot(sep={sep!r}): no levels present in the column."
+        )
+
+    n_facets = len(levels)
+    # Per-facet row count for sizing the panel heights.
+    rows_per_facet = [
+        int((col == lv).sum()) for lv in levels
+    ]
+    max_rows = max(rows_per_facet) if rows_per_facet else 1
+
+    fig, axes = plt.subplots(
+        n_facets,
+        1,
+        figsize=(7, max(3.0, max_rows * 0.35) * n_facets * 0.9),
+        sharex=True,
+    )
+    if n_facets == 1:
+        axes = np.array([axes])
+    else:
+        axes = np.asarray(axes).reshape(-1)
+
+    # Slice the EMMResult per facet. Drop ``sep`` from target / by
+    # of each sub-EMM so the row labels in each facet don't repeat
+    # the panel-header information.
+    sub_target = [t for t in emm.target if t != sep]
+    sub_by = [b for b in emm.by if b != sep]
+    for ax_facet, lv in zip(axes, levels, strict=True):
+        mask = (col == lv).to_numpy()
+        if not mask.any():
+            ax_facet.set_visible(False)
+            continue
+        sub_frame = emm.frame.loc[mask].reset_index(drop=True)
+        sub_linfct = emm.linfct[mask]
+        sub_emm = _dc_replace(
+            emm,
+            frame=sub_frame,
+            linfct=sub_linfct,
+            target=sub_target,
+            by=sub_by,
+        )
+        # Recurse with sep=None so the per-facet plot uses the
+        # full single-Axes machinery (including comparisons
+        # overlay if requested).
+        plot(
+            sub_emm,
+            ax=ax_facet,
+            ref_line=ref_line,
+            sep=None,
+            comparisons=comparisons,
+            comparison_level=comparison_level,
+            comparison_adjust=comparison_adjust,
+            PIs=PIs,
+            level=level,
+        )
+        ax_facet.set_title(f"{sep} = {lv}", fontsize=10, loc="left")
+    fig.tight_layout()
+    return axes
+
+
+def _overlay_comparison_arrows(
+    ax: Axes,
+    emm: EMMResult,
+    *,
+    means: np.ndarray,
+    y_pos: np.ndarray,
+    level: float,
+    adjust: str,
+) -> None:
+    """Draw Gabriel-style comparison intervals on a forest Axes.
+
+    Each EMM gets a horizontal segment of half-width
+    ``c_i = q · SE_i / sqrt(2)``, where ``q`` is the critical
+    value at the chosen level + adjustment. Two segments overlap
+    iff the corresponding pair is non-significantly different
+    under that adjustment (Gabriel, 1978).
+    """
+    from scipy import stats
+
+    n = len(means)
+    if n < 2:
+        # No pairs to draw — degenerate to a no-op rather than
+        # erroring (a user might splat ``comparisons=True``
+        # uniformly across multiple EMM objects of varying size).
+        return
+    se = emm.frame["SE"].to_numpy()
+    df_arr = emm.frame["df"].to_numpy()
+    # Use a representative df for the critical value. Per-row df is
+    # the right thing in principle but the overlap-as-significance
+    # interpretation needs a SHARED critical value across all
+    # arrows. Use the harmonic mean to handle ragged df without
+    # silently letting one large-df row dominate.
+    df_finite = df_arr[np.isfinite(df_arr)]
+    if len(df_finite) == 0:
+        df_for_q = np.inf
+    else:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            df_for_q = len(df_finite) / np.sum(1.0 / df_finite)
+        if not np.isfinite(df_for_q):
+            df_for_q = float(np.median(df_finite))
+    alpha = 1.0 - level
+    adj_lower = adjust.lower()
+    if adj_lower in ("none", "no", "wald"):
+        q = stats.t.ppf(1.0 - alpha / 2.0, df_for_q)
+    elif adj_lower == "bonferroni":
+        # n_pairs = n*(n-1)/2 comparisons in the family.
+        n_pairs = n * (n - 1) // 2
+        q = stats.t.ppf(1.0 - alpha / (2.0 * n_pairs), df_for_q)
+    elif adj_lower == "sidak":
+        n_pairs = n * (n - 1) // 2
+        q_alpha = 1.0 - (1.0 - alpha) ** (1.0 / n_pairs)
+        q = stats.t.ppf(1.0 - q_alpha / 2.0, df_for_q)
+    else:
+        # Tukey: studentised range divided by sqrt(2) gives the
+        # equivalent t-style critical value for pairwise
+        # comparisons. R uses qtukey; scipy exposes
+        # ``stats.studentized_range``.
+        q_tukey = stats.studentized_range.ppf(level, n, df_for_q)
+        q = q_tukey / np.sqrt(2.0)
+    half = q * se / np.sqrt(2.0)
+    # Stagger the arrows slightly below the CI errorbar so both
+    # are readable. ``y_pos`` is integer-spaced; offset by 0.18
+    # which is well inside the 1.0 step.
+    arrow_y = y_pos + 0.18
+    for i in range(n):
+        if not (np.isfinite(half[i]) and np.isfinite(means[i])):
+            continue
+        ax.plot(
+            [means[i] - half[i], means[i] + half[i]],
+            [arrow_y[i], arrow_y[i]],
+            color="C3",
+            lw=2.0,
+            solid_capstyle="butt",
+            label="comparison" if i == 0 else None,
+        )
 
 
 def _emmip_frame(

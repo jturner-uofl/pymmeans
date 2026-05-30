@@ -25,6 +25,7 @@ Transformations recognised by name (matching the patsy-canonical form of
 - ``probit(x)`` -- inverse ``Phi`` (normal CDF)
 - ``cloglog(x)`` -- inverse ``1 - exp(-exp(.))``
 - ``arcsin(sqrt(x))`` -- inverse ``sin(.)**2``
+- ``np.arctanh(x)`` / ``make_tran("atanh")`` -- inverse ``tanh(.)``
 
 Auto-detection requires the inner expression to be a single identifier.
 Composite forms like ``np.log(y + 1)``, ``np.sqrt(y * 2)``, or
@@ -41,6 +42,12 @@ Parametric transforms (via :func:`make_tran` only — not auto-detected):
 - ``make_tran("genlog", base=)`` -- forward ``log(y + base)``
 - ``make_tran("sqrt_const", const=)`` -- forward ``sqrt(y + const)``
 - ``make_tran("scale", mean=, sd=)`` -- forward ``(y - mean) / sd``
+- ``make_tran("power", lambda_=)`` -- forward ``y**λ`` (strict-power; ``y > 0``)
+- ``make_tran("sympower", lambda_=)`` -- forward ``sign(y) * |y|**λ`` (signed power)
+- ``make_tran("bcnPower", lambda_=, gamma=)`` -- forward
+  ``((y+γ)**λ - 1) / λ`` (Box-Cox with negatives via shift)
+- ``make_tran("yj.power", lambda_=)`` -- Yeo-Johnson piecewise
+  power; handles negative y natively
 
 The four proportion-family transforms (``logit`` / ``probit`` /
 ``cloglog`` / ``asin_sqrt``) are intended for OLS fits on a (0, 1)-
@@ -294,6 +301,23 @@ def _sin_sq_deriv(x: np.ndarray) -> np.ndarray:
     return np.sin(2.0 * x)
 
 
+def _tanh_inv(x: np.ndarray) -> np.ndarray:
+    """Inverse of atanh(.) — hyperbolic tangent.
+
+    Forward (link): ``atanh(y) = 0.5 * log((1 + y) / (1 - y))`` for
+    ``y ∈ (-1, 1)``. Common use cases are Fisher's z-transform of
+    Pearson correlations and analyses of bounded-on-(-1, 1) outcomes
+    like LD parity or normalised differences.
+    """
+    return np.tanh(x)
+
+
+def _tanh_inv_deriv(x: np.ndarray) -> np.ndarray:
+    # d/dz tanh(z) = 1 - tanh(z)^2 = sech(z)^2. Numerically stable as
+    # written (avoids 1/cosh^2 which can underflow at large |z|).
+    return 1.0 - np.tanh(x) ** 2
+
+
 # Box-Cox helpers: module-level so `functools.partial(_boxcox_inv, lam)`
 # is picklable (the bound `lam` is a plain float). Lambdas/closures would
 # break multiprocessing bootstrap and joblib caching, so we go through
@@ -373,6 +397,167 @@ def _scale_inv_deriv(mu: float, sd: float, x: np.ndarray) -> np.ndarray:
     return np.full_like(np.asarray(x, dtype=float), sd)
 
 
+# ``power(y, lambda)`` — R ``make.tran("power", lambda)``.
+# Forward: z = y^lambda for y > 0 (lambda > 0); a strict-power transform
+# with no shift. Distinct from Box-Cox: Box-Cox subtracts 1 and divides
+# by lambda to give a smooth lambda -> 0 limit; ``power`` is just the
+# raw power, useful when the user wants ``y^0.5`` (square root) or
+# ``y^-1`` (reciprocal) without the Box-Cox affine adjustment.
+#
+# Inverse: y = z^(1/lambda). Domain: z^(1/lambda) is real-valued for
+# z > 0 when 1/lambda is non-integer; we return NaN for z <= 0 to
+# match the Box-Cox out-of-domain policy and avoid silent
+# wrong-numerics on negative link values.
+def _power_inv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Inverse of ``power(., lambda)`` — i.e. ``z ** (1/lambda)``.
+
+    Returns NaN for ``z <= 0`` when ``1/lambda`` is non-integer to
+    match the strict-power domain (the forward transform requires
+    ``y > 0``).
+    """
+    inv_lam = 1.0 / lam
+    x_arr = np.asarray(x, dtype=float)
+    return np.where(
+        x_arr > 0.0, np.power(np.maximum(x_arr, 0.0), inv_lam), np.nan,
+    )
+
+
+def _power_inv_deriv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Derivative of ``_power_inv`` w.r.t. ``x`` at parameter ``lam``.
+
+    ``d/dz z^(1/lam) = (1/lam) * z^(1/lam - 1)`` for ``z > 0``.
+    NaN for ``z <= 0``; see :func:`_power_inv`.
+    """
+    inv_lam = 1.0 / lam
+    x_arr = np.asarray(x, dtype=float)
+    return np.where(
+        x_arr > 0.0,
+        inv_lam * np.power(np.maximum(x_arr, 0.0), inv_lam - 1.0),
+        np.nan,
+    )
+
+
+# ``sympower(y, lambda)`` — R ``make.tran("sympower", lambda)``.
+# Forward: z = sign(y) * |y|^lambda, defined for all real y.
+# Useful when the response can be negative (e.g. detrended signals)
+# and a plain ``power`` is out-of-domain.
+#
+# Inverse: y = sign(z) * |z|^(1/lambda). Symmetric in sign, so
+# negative link values map to negative response values without the
+# NaN-at-zero policy ``power`` needs.
+def _sympower_inv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Inverse of ``sympower(., lambda)`` — sign-preserving power.
+
+    ``y = sign(z) * |z|^(1/lambda)`` for all real z. Continuous and
+    differentiable at z = 0 when ``1/lambda > 1`` (i.e. ``lambda <
+    1``); when ``1/lambda < 1`` the derivative diverges at zero but
+    the inverse itself is still well-defined.
+    """
+    inv_lam = 1.0 / lam
+    x_arr = np.asarray(x, dtype=float)
+    return np.sign(x_arr) * np.power(np.abs(x_arr), inv_lam)
+
+
+def _sympower_inv_deriv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Derivative of ``_sympower_inv`` w.r.t. ``x`` at parameter ``lam``.
+
+    ``d/dz [sign(z) * |z|^(1/lam)] = (1/lam) * |z|^(1/lam - 1)``;
+    the sign cancels because ``sign(z)^2 = 1`` on its support. At
+    ``z = 0`` the derivative is ``+inf`` when ``1/lam < 1`` (i.e.
+    ``lam > 1``); we return ``+inf`` rather than NaN so the
+    delta-method SE machinery sees a clearly-flagged divergence
+    instead of a silent zero.
+    """
+    inv_lam = 1.0 / lam
+    x_arr = np.asarray(x, dtype=float)
+    abs_x = np.abs(x_arr)
+    if inv_lam == 1.0:
+        # Identity case: derivative is 1 everywhere.
+        return np.ones_like(x_arr)
+    return inv_lam * np.power(abs_x, inv_lam - 1.0)
+
+
+# ``bcnPower(y, lambda, gamma)`` — "Box-Cox with negatives", from
+# Hawkins & Weisberg (2017). Forward: ``z = ((y + gamma)^lambda - 1)
+# / lambda`` for lambda != 0, else ``log(y + gamma)``. Implementation
+# notes:
+#   - Reuses :func:`_boxcox_inv` for the lambda-dependent shape; the
+#     additive gamma shift drops out of the derivative (so we reuse
+#     :func:`_boxcox_inv_deriv` directly via partial).
+#   - Domain: forward requires ``y + gamma > 0``; inverse returns
+#     NaN where the Box-Cox base ``lam * z + 1`` is non-positive.
+def _bcn_power_inv(
+    lam: float, gamma: float, x: np.ndarray,
+) -> np.ndarray:
+    """Inverse of bcnPower(., lambda, gamma).
+
+    ``y = (lam * z + 1)^(1/lam) - gamma`` for ``lam != 0``;
+    ``y = exp(z) - gamma`` for ``lam == 0``. NaN where the
+    underlying Box-Cox inverse is NaN.
+    """
+    return _boxcox_inv(lam, x) - gamma
+
+
+# Inverse derivative is identical to plain Box-Cox's (gamma is a
+# constant shift that vanishes under differentiation). The
+# ``make_tran('bcnPower', ...)`` branch reuses
+# :func:`_boxcox_inv_deriv` via ``functools.partial`` — no separate
+# helper needed.
+
+
+# ``yj.power(y, lambda)`` — Yeo & Johnson (2000) power transform.
+# Defined piecewise so the transform handles negative ``y`` natively
+# (unlike Box-Cox, which requires ``y > 0``). Forward:
+#   - ``y >= 0``, ``lambda != 0``: ``((y + 1)^lambda - 1) / lambda``
+#   - ``y >= 0``, ``lambda == 0``: ``log(y + 1)``
+#   - ``y <  0``, ``lambda != 2``: ``-((-y + 1)^(2-lambda) - 1) / (2-lambda)``
+#   - ``y <  0``, ``lambda == 2``: ``-log(-y + 1)``
+# Forward is monotonic in y; ``sign(z) == sign(y)`` so the inverse
+# branches on ``z >= 0`` vs ``z < 0``.
+def _yj_power_inv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Inverse of yj.power(., lambda)."""
+    x_arr = np.asarray(x, dtype=float)
+    out = np.empty_like(x_arr)
+    pos = x_arr >= 0.0
+    neg = ~pos
+    # Positive branch: inverse of ((y+1)^lam - 1)/lam (lam != 0)
+    # or log(y+1) (lam == 0). Result is y >= 0.
+    if lam == 0.0:
+        out[pos] = np.expm1(x_arr[pos])  # exp(z) - 1
+    else:
+        base_pos = lam * x_arr[pos] + 1.0
+        out[pos] = np.power(np.maximum(base_pos, 0.0), 1.0 / lam) - 1.0
+    # Negative branch: inverse of -((-y+1)^(2-lam) - 1) / (2-lam)
+    # (lam != 2) or -log(-y+1) (lam == 2). Result is y < 0.
+    if lam == 2.0:
+        out[neg] = 1.0 - np.exp(-x_arr[neg])
+    else:
+        two_m = 2.0 - lam
+        base_neg = 1.0 - two_m * x_arr[neg]
+        out[neg] = 1.0 - np.power(np.maximum(base_neg, 0.0), 1.0 / two_m)
+    return out
+
+
+def _yj_power_inv_deriv(lam: float, x: np.ndarray) -> np.ndarray:
+    """Derivative of yj.power inverse w.r.t. z."""
+    x_arr = np.asarray(x, dtype=float)
+    out = np.empty_like(x_arr)
+    pos = x_arr >= 0.0
+    neg = ~pos
+    if lam == 0.0:
+        out[pos] = np.exp(x_arr[pos])
+    else:
+        base_pos = lam * x_arr[pos] + 1.0
+        out[pos] = np.power(np.maximum(base_pos, 0.0), 1.0 / lam - 1.0)
+    if lam == 2.0:
+        out[neg] = np.exp(-x_arr[neg])
+    else:
+        two_m = 2.0 - lam
+        base_neg = 1.0 - two_m * x_arr[neg]
+        out[neg] = np.power(np.maximum(base_neg, 0.0), 1.0 / two_m - 1.0)
+    return out
+
+
 # the scale transform is LINEAR, so the
 # contrast back-transform is well-defined: a difference `A - B` on the
 # z-scored scale corresponds to `sd * (A - B)` on the original scale
@@ -396,6 +581,156 @@ def _identity_fn(x: np.ndarray) -> np.ndarray:
 
 def _identity_deriv(x: np.ndarray) -> np.ndarray:
     return np.ones_like(np.asarray(x, dtype=float))
+
+
+# Forward transforms (response -> link). Used by :func:`regrid` for
+# the general "switch to a different scale" workflow — apply the
+# new transform's forward to the response-scale EMMs, with delta-
+# method SE via the chain rule ``forward'(y) = 1 / inverse'(forward(y))``.
+#
+# Each helper is a module-level function so the resulting synthetic
+# Transform stays picklable (regrid composes a temporary Transform
+# carrying these as its ``inverse`` and ``inverse_deriv`` for reuse
+# of the existing :func:`regrid_response` machinery).
+def _log_forward(y: np.ndarray) -> np.ndarray:
+    return np.log(y)
+
+
+def _log_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return 1.0 / np.asarray(y, dtype=float)
+
+
+def _log10_forward(y: np.ndarray) -> np.ndarray:
+    return np.log10(y)
+
+
+def _log10_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return 1.0 / (np.asarray(y, dtype=float) * np.log(10.0))
+
+
+def _log2_forward(y: np.ndarray) -> np.ndarray:
+    return np.log2(y)
+
+
+def _log2_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return 1.0 / (np.asarray(y, dtype=float) * np.log(2.0))
+
+
+def _log1p_forward(y: np.ndarray) -> np.ndarray:
+    return np.log1p(y)
+
+
+def _log1p_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return 1.0 / (np.asarray(y, dtype=float) + 1.0)
+
+
+def _sqrt_forward(y: np.ndarray) -> np.ndarray:
+    return np.sqrt(y)
+
+
+def _sqrt_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return 0.5 / np.sqrt(np.asarray(y, dtype=float))
+
+
+def _exp_forward(y: np.ndarray) -> np.ndarray:
+    return np.exp(y)
+
+
+def _exp_forward_deriv(y: np.ndarray) -> np.ndarray:
+    return np.exp(y)
+
+
+def _logit_forward(y: np.ndarray) -> np.ndarray:
+    from scipy.special import logit as _scipy_logit
+    return _scipy_logit(y)
+
+
+def _logit_forward_deriv(y: np.ndarray) -> np.ndarray:
+    y_arr = np.asarray(y, dtype=float)
+    return 1.0 / (y_arr * (1.0 - y_arr))
+
+
+def _probit_forward(y: np.ndarray) -> np.ndarray:
+    from scipy.stats import norm as _scipy_norm
+    return _scipy_norm.ppf(y)
+
+
+def _probit_forward_deriv(y: np.ndarray) -> np.ndarray:
+    # forward'(y) = 1 / pdf(ppf(y)). For the standard normal,
+    # pdf(z) = exp(-z^2/2)/sqrt(2*pi); compute directly to avoid
+    # the scipy dispatch on the hot path.
+    from scipy.stats import norm as _scipy_norm
+    z = _scipy_norm.ppf(y)
+    return np.sqrt(2.0 * np.pi) * np.exp(0.5 * z * z)
+
+
+def _cloglog_forward(y: np.ndarray) -> np.ndarray:
+    # cloglog(y) = log(-log(1 - y)) for y in (0, 1).
+    return np.log(-np.log1p(-np.asarray(y, dtype=float)))
+
+
+def _cloglog_forward_deriv(y: np.ndarray) -> np.ndarray:
+    # d/dy log(-log(1-y))
+    # = (1/(-log(1-y))) * (d/dy(-log(1-y)))
+    # = (1/(-log(1-y))) * (1/(1-y))
+    # = -1 / ((1-y) * log(1-y))
+    y_arr = np.asarray(y, dtype=float)
+    return -1.0 / ((1.0 - y_arr) * np.log1p(-y_arr))
+
+
+def _asin_sqrt_forward(y: np.ndarray) -> np.ndarray:
+    return np.arcsin(np.sqrt(y))
+
+
+def _asin_sqrt_forward_deriv(y: np.ndarray) -> np.ndarray:
+    # d/dy arcsin(sqrt(y)) = 1 / (2 * sqrt(y * (1 - y)))
+    y_arr = np.asarray(y, dtype=float)
+    return 1.0 / (2.0 * np.sqrt(y_arr * (1.0 - y_arr)))
+
+
+def _arctanh_forward(y: np.ndarray) -> np.ndarray:
+    return np.arctanh(y)
+
+
+def _arctanh_forward_deriv(y: np.ndarray) -> np.ndarray:
+    # d/dy arctanh(y) = 1 / (1 - y^2)
+    y_arr = np.asarray(y, dtype=float)
+    return 1.0 / (1.0 - y_arr * y_arr)
+
+
+def _reciprocal_forward(y: np.ndarray) -> np.ndarray:
+    return np.reciprocal(np.asarray(y, dtype=float))
+
+
+def _reciprocal_forward_deriv(y: np.ndarray) -> np.ndarray:
+    y_arr = np.asarray(y, dtype=float)
+    return -1.0 / (y_arr * y_arr)
+
+
+# Registry of forward functions keyed by transform name. The
+# :func:`regrid` "switch to a new scale" path looks transforms up
+# here; parametric families (boxcox / genlog / ...) and user-
+# defined transforms are not in the table and must be requested
+# via the explicit Transform-instance form (deferred to 0.2.0).
+_FORWARD: dict[str, tuple[
+    Callable[[np.ndarray], np.ndarray],
+    Callable[[np.ndarray], np.ndarray],
+]] = {
+    "log": (_log_forward, _log_forward_deriv),
+    "log10": (_log10_forward, _log10_forward_deriv),
+    "log2": (_log2_forward, _log2_forward_deriv),
+    "log1p": (_log1p_forward, _log1p_forward_deriv),
+    "sqrt": (_sqrt_forward, _sqrt_forward_deriv),
+    "exp": (_exp_forward, _exp_forward_deriv),
+    "logit": (_logit_forward, _logit_forward_deriv),
+    "probit": (_probit_forward, _probit_forward_deriv),
+    "cloglog": (_cloglog_forward, _cloglog_forward_deriv),
+    "asin_sqrt": (_asin_sqrt_forward, _asin_sqrt_forward_deriv),
+    "arctanh": (_arctanh_forward, _arctanh_forward_deriv),
+    "atanh": (_arctanh_forward, _arctanh_forward_deriv),
+    "reciprocal": (_reciprocal_forward, _reciprocal_forward_deriv),
+    "identity": (_identity_fn, _identity_deriv),
+}
 
 
 _BUILTIN: dict[str, Transform] = {
@@ -439,7 +774,155 @@ _BUILTIN: dict[str, Transform] = {
     "reciprocal": Transform(
         "reciprocal", _reciprocal, _neg_reciprocal_sq, None, False, None
     ),
+    # Hyperbolic arctangent. Registered under TWO keys so both
+    # ``np.arctanh(y)`` (numpy/patsy idiom; auto-detected) and
+    # ``make_tran("atanh")`` (R / math idiom; explicit) resolve to
+    # the same Transform. No ``bias_mean`` — like the other bounded-
+    # response transforms (logit / probit / cloglog / asin_sqrt),
+    # the inverse's second derivative is sign-changing on the link
+    # scale, so the Taylor bias correction R uses for logs has no
+    # clean closed form. Users wanting bias-adjusted response-scale
+    # means on atanh-transformed responses should use bootstrap_ci
+    # with kind='parametric'.
+    "arctanh": Transform(
+        "arctanh", _tanh_inv, _tanh_inv_deriv, None, False, None
+    ),
+    "atanh": Transform(
+        "atanh", _tanh_inv, _tanh_inv_deriv, None, False, None
+    ),
 }
+
+
+# Public alias for the built-in registry. The previously-private
+# ``_BUILTIN`` mapping is now a documented surface so downstream
+# code (and external callers building custom transforms) can read
+# the available built-ins by name, iterate the supported transforms,
+# and plug new ones in via :func:`register_transform`. ``_BUILTIN``
+# is retained as a private alias for backwards compatibility with
+# existing internal call sites that already reference it.
+TRANSFORMS: dict[str, Transform] = _BUILTIN
+
+
+def register_transform(
+    name: str,
+    transform: Transform,
+    *,
+    overwrite: bool = False,
+    forward: Callable[[np.ndarray], np.ndarray] | None = None,
+    forward_deriv: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> None:
+    """Register a custom transform so it's resolvable by name.
+
+    After registration, ``make_tran(name)`` returns the registered
+    ``Transform`` and ``detect_transform("np.{name}(y)")`` resolves to
+    it when the LHS uses the matching function name.
+
+    Parameters
+    ----------
+    name
+        Identifier the transform should be registered under. Use the
+        bare function name (``"power"``, ``"atanh"``) so
+        :func:`detect_transform` picks it up from ``"np.power(y)"``-
+        style patsy endog strings. Names are lower-cased on lookup
+        to match ``detect_transform``'s canonicalisation.
+    transform
+        The :class:`Transform` to register. Must already be a fully
+        built instance (use :func:`make_tran` for parametric families
+        or construct ``Transform(...)`` directly for ad-hoc inverses).
+    overwrite
+        Default ``False``: registering a name that already exists
+        raises ``ValueError`` so plugin code doesn't silently shadow
+        a built-in. Pass ``True`` to deliberately replace an existing
+        entry.
+    forward
+        Optional callable mapping response-scale values to the new
+        display scale (the "forward" direction; ``transform`` stores
+        the back-transform). When supplied alongside
+        ``forward_deriv``, the entry is ALSO registered in the
+        named-forward dispatch table so
+        ``regrid(em, transform=name)`` can apply this transform to a
+        response-scale EMM. When omitted, only the
+        back-transform path is wired up — ``regrid(transform=name)``
+        will raise with a clear "register the forward direction"
+        message.
+    forward_deriv
+        Derivative of ``forward`` w.r.t. its argument. Required
+        whenever ``forward`` is supplied (used by the delta-method SE
+        in the forward-scale display).
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is empty, not a string, or already registered
+        (when ``overwrite=False``).
+    TypeError
+        If ``transform`` is not a :class:`Transform` instance.
+
+    Examples
+    --------
+    >>> from pymmeans import Transform, register_transform # doctest: +SKIP
+    >>> import numpy as np # doctest: +SKIP
+    >>> # Custom atanh transform.
+    >>> register_transform( # doctest: +SKIP
+    ... "atanh",
+    ... Transform("atanh", np.tanh, lambda x: 1 - np.tanh(x) ** 2),
+    ... )
+
+    Notes
+    -----
+    The registry is process-local (a plain module-level dict, not a
+    :class:`contextvars.ContextVar`). Custom registrations made in
+    the parent process do NOT propagate to ``joblib.Parallel`` /
+    ``ProcessPoolExecutor`` workers; re-register inside the worker
+    function (or use the worker's ``initializer=`` hook).
+    """
+    if not isinstance(name, str):
+        raise TypeError(
+            f"register_transform(name=...): name must be a string, got "
+            f"{type(name).__name__}."
+        )
+    if not name:
+        raise ValueError(
+            "register_transform(name=...): name must be non-empty."
+        )
+    if not isinstance(transform, Transform):
+        raise TypeError(
+            "register_transform(transform=...): transform must be a "
+            f"pymmeans.Transform instance, got {type(transform).__name__}."
+        )
+    key = name.lower()
+    if key in TRANSFORMS and not overwrite:
+        raise ValueError(
+            f"register_transform: name {name!r} already registered "
+            f"(existing transform: {TRANSFORMS[key].name!r}). Pass "
+            "``overwrite=True`` to replace it."
+        )
+    # Asymmetric forward/forward_deriv: providing one without the
+    # other would silently route through ``_FORWARD`` with a missing
+    # callable. Refuse cleanly so the bug surfaces at registration
+    # rather than at the first ``regrid(transform=name)`` call.
+    if (forward is None) != (forward_deriv is None):
+        raise ValueError(
+            "register_transform: 'forward' and 'forward_deriv' must be "
+            "supplied together (or both omitted). Got "
+            f"forward={'set' if forward is not None else 'None'}, "
+            f"forward_deriv={'set' if forward_deriv is not None else 'None'}."
+        )
+    TRANSFORMS[key] = transform
+    # When the caller supplies both directions, wire up the named-
+    # forward dispatch table too so ``regrid(em, transform=name)``
+    # can apply this transform to a response-scale EMM. Without the
+    # forward pair the back-transform path still works (regrid_response,
+    # detect_transform on patsy LHS) — only forward-name dispatch is
+    # opt-in.
+    if forward is not None and forward_deriv is not None:
+        _FORWARD[key] = (forward, forward_deriv)
+    elif overwrite and key in _FORWARD:
+        # Overwriting a transform that previously HAD a forward pair,
+        # with one that omits the forward kwargs, must drop the stale
+        # entry — otherwise ``regrid(em, transform=name)`` would
+        # silently keep applying the OLD transform's forward direction.
+        del _FORWARD[key]
 
 
 def detect_transform(endog_name: str) -> Transform | None:
@@ -527,6 +1010,7 @@ def make_tran(
     const: float | None = None,
     mean: float | None = None,
     sd: float | None = None,
+    gamma: float | None = None,
     contrast_inverse: Callable[[np.ndarray], np.ndarray] | None = None,
     contrast_inverse_deriv: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> Transform:
@@ -755,6 +1239,123 @@ def make_tran(
             contrast_inverse=cinv,
             contrast_inverse_deriv=cderiv,
         )
+    if key == "power":
+        # R ``make.tran("power", lambda)``. Strict-power forward
+        # ``z = y^lambda``; distinct from Box-Cox (no -1/lambda
+        # affine adjustment). Domain: ``y > 0``.
+        if lambda_ is None:
+            raise ValueError(
+                "make_tran('power') requires a power parameter "
+                "``lambda_=``. Use ``make_tran('boxcox', "
+                "lambda_=...)`` if you want the Box-Cox affine "
+                "variant (smooth limit as lambda -> 0), or ``"
+                "make_tran('log')`` for the lambda = 0 case."
+            )
+        lam = _require_finite_param("lambda_", lambda_)
+        if lam == 0.0:
+            raise ValueError(
+                "make_tran('power', lambda_=0) is undefined "
+                "(``y^0 = 1`` for every y, so the transform is "
+                "non-invertible). Use ``make_tran('log')`` for the "
+                "logarithmic limit instead."
+            )
+        inv_fn = functools.partial(_power_inv, lam)
+        d_fn = functools.partial(_power_inv_deriv, lam)
+        return Transform(
+            name=f"power(lambda={lam})",
+            inverse=inv_fn,
+            inverse_deriv=d_fn,
+            bias_mean=None,
+            is_log=False,
+            bias_deriv=None,
+        )
+    if key == "sympower":
+        # R ``make.tran("sympower", lambda)``. Sign-preserving power
+        # ``z = sign(y) * |y|^lambda``, defined on all real y. Useful
+        # for detrended / mean-subtracted responses that can be
+        # negative.
+        if lambda_ is None:
+            raise ValueError(
+                "make_tran('sympower') requires a power parameter "
+                "``lambda_=``. Common choices: lambda_=2 (squared "
+                "with sign preserved), lambda_=0.5 (signed sqrt)."
+            )
+        lam = _require_finite_param("lambda_", lambda_)
+        if lam == 0.0:
+            raise ValueError(
+                "make_tran('sympower', lambda_=0) is undefined "
+                "(``sign(y) * |y|^0`` collapses to ``sign(y)`` "
+                "which is non-invertible across zero). Use a small "
+                "positive lambda (e.g. 0.5) or ``make_tran('log')`` "
+                "after taking ``log(|y|+1)`` with ``genlog``."
+            )
+        inv_fn = functools.partial(_sympower_inv, lam)
+        d_fn = functools.partial(_sympower_inv_deriv, lam)
+        return Transform(
+            name=f"sympower(lambda={lam})",
+            inverse=inv_fn,
+            inverse_deriv=d_fn,
+            bias_mean=None,
+            is_log=False,
+            bias_deriv=None,
+        )
+    if key == "bcnpower":
+        # R ``make.tran("bcnPower", lambda, gamma)`` — "Box-Cox with
+        # Negatives" (Hawkins & Weisberg 2017). Equivalent to a
+        # Box-Cox on the shifted response ``y + gamma``; the
+        # derivative is identical to Box-Cox's (gamma drops out
+        # under differentiation), so we reuse the Box-Cox
+        # derivative helper directly via partial.
+        if lambda_ is None or gamma is None:
+            raise ValueError(
+                "make_tran('bcnPower') requires BOTH a power "
+                "``lambda_=`` and a shift ``gamma=``. Common "
+                "workflow: choose gamma so all observations of "
+                "y + gamma are strictly positive, then estimate "
+                "lambda via profile likelihood."
+            )
+        lam = _require_finite_param("lambda_", lambda_)
+        gam = _require_finite_param("gamma", gamma)
+        inv_fn = functools.partial(_bcn_power_inv, lam, gam)
+        d_fn = functools.partial(_boxcox_inv_deriv, lam)
+        return Transform(
+            name=f"bcnPower(lambda={lam}, gamma={gam})",
+            inverse=inv_fn,
+            inverse_deriv=d_fn,
+            bias_mean=None,
+            is_log=(lam == 0.0),
+            bias_deriv=None,
+        )
+    if key in ("yj.power", "yj_power", "yjpower"):
+        # R ``make.tran("yj.power", lambda)`` — Yeo & Johnson (2000)
+        # power transform. Piecewise definition makes it well-
+        # defined for negative ``y`` natively (unlike Box-Cox).
+        if lambda_ is None:
+            raise ValueError(
+                "make_tran('yj.power') requires a power parameter "
+                "``lambda_=``. Common defaults: lambda_=0 collapses "
+                "to log(y+1) on the positive side; lambda_=2 to "
+                "-log(-y+1) on the negative side. R `car::yjPower` "
+                "uses lambda estimated via profile likelihood."
+            )
+        lam = _require_finite_param("lambda_", lambda_)
+        inv_fn = functools.partial(_yj_power_inv, lam)
+        d_fn = functools.partial(_yj_power_inv_deriv, lam)
+        # is_log marks the family in :func:`regrid_response`'s
+        # contrast back-transform; Yeo-Johnson at lambda=0 reduces
+        # to log(y+1) on the y>=0 side but not on the y<0 side, so
+        # the ratio interpretation only partially holds. Conservative
+        # choice: is_log=False — users wanting log-family contrast
+        # semantics should pass ``tran=make_tran('log1p')`` for the
+        # positive-response special case.
+        return Transform(
+            name=f"yj.power(lambda={lam})",
+            inverse=inv_fn,
+            inverse_deriv=d_fn,
+            bias_mean=None,
+            is_log=False,
+            bias_deriv=None,
+        )
     if inverse is None and inverse_deriv is None:
         if key in _BUILTIN:
             return _BUILTIN[key]
@@ -762,8 +1363,10 @@ def make_tran(
             f"make_tran('{name}') is not a built-in transform "
             f"(known: {sorted(_BUILTIN)}). To build a custom Transform "
             "pass `inverse` and `inverse_deriv` callables, or pass one "
-            "of the parametric families: `lambda_=` (boxcox), `base=` "
-            "(genlog), `const=` (sqrt_const)."
+            "of the parametric families: `lambda_=` (boxcox / power / "
+            "sympower / yj.power), `lambda_=` + `gamma=` (bcnPower), "
+            "`base=` (genlog), `const=` (sqrt_const), `mean=` + `sd=` "
+            "(scale)."
         )
     if inverse is None or inverse_deriv is None:
         raise ValueError(
@@ -1522,7 +2125,7 @@ def regrid(
 ) -> Any:
     """R-style ``regrid(object, transform=...)`` wrapper.
 
-    Mirrors R ``emmeans::regrid`` for the cases pymmeans v0.1 supports:
+    Mirrors R ``emmeans::regrid``:
 
     - ``transform="response"`` (or ``"mu"`` / ``"unlink"``, all R
       aliases): back-transform to the response scale. Equivalent to
@@ -1532,11 +2135,26 @@ def regrid(
       the input unchanged. The ``None`` value matches R's
       ``transform = NULL`` idiom; the string forms match R's
       documented aliases.
-    - ``transform="log" | "log10" | "log2" | "sqrt" | "logit" | ...``
-      Re-expressing the EMMs on a *different* link scale is not in
-      v0.1; raise with a clear workaround pointer (apply the new
-      transform via ``posterior_emmeans`` if available, or rebuild
-      the model with the desired LHS).
+    - ``transform="log" | "log10" | "log2" | "log1p" | "sqrt" |
+      "exp" | "logit" | "probit" | "cloglog" | "asin_sqrt" |
+      "arctanh" / "atanh" | "reciprocal" | "identity"``:
+      re-express the EMMs on a different scale by applying the
+      named transform's **forward** to the response-scale
+      predictions, with SEs propagated via the delta method
+      (chain rule using the transform's existing inverse
+      derivative: ``forward'(y) = 1 / inverse'(forward(y))``). CI
+      endpoints are likewise transformed (matching R's regrid
+      convention; symmetric Wald is rebuilt on the new scale
+      downstream via :func:`summary`). When the input is on the
+      link scale, it is first back-transformed to response via
+      the model's own inverse-link before the new forward is
+      applied.
+
+    Parametric families (boxcox / genlog / sqrt_const / scale /
+    power / sympower / bcnPower / yj.power) and user-built
+    Transform instances are not yet supported as the ``transform=``
+    target here — the v0.1 forward registry covers a finite set of
+    named scales. Refused with a clear pointer.
 
     Parameters
     ----------
@@ -1547,10 +2165,16 @@ def regrid(
         an alias for ``"pass"`` (R's NULL convention).
     bias_adjust, force
         Passed through to :func:`regrid_response` when applicable.
+        ``bias_adjust`` is honoured only on the response-back-
+        transformation step (R's behaviour), not when applying a
+        subsequent forward.
 
     Returns
     -------
-    Same type as the input.
+    Same type as the input. The returned EMM's ``type`` is
+    stamped ``"response"`` (R's convention: anything that is no
+    longer on the model's native link is treated as a response-
+    scale display).
     """
     # R idiomatically uses ``transform = NULL`` to mean "leave the
     # scale alone". Accept Python ``None`` as the equivalent so users
@@ -1565,14 +2189,125 @@ def regrid(
         )
     if t in ("pass", "none"):
         return emm_or_contrast
-    # Anything else: explicit not-yet-implemented to avoid
-    # silently returning an EMM with the wrong .type tag.
+    if t in _FORWARD:
+        return _regrid_to_named_scale(
+            emm_or_contrast, t, bias_adjust=bias_adjust, force=force,
+        )
+    # The name is registered as a back-transform (via
+    # register_transform) but no forward direction was supplied. Give
+    # the user a specific actionable message rather than the generic
+    # NotImplementedError — the user did everything right except
+    # declare the forward direction.
+    if t in TRANSFORMS:
+        raise NotImplementedError(
+            f"regrid(transform={transform!r}): the transform is "
+            "registered in pymmeans.TRANSFORMS (for back-transform / "
+            "detect_transform lookup) but no FORWARD direction was "
+            "supplied — ``regrid(em, transform=name)`` needs to apply "
+            "the transform to response-scale predictions, which "
+            "requires the forward callable plus its derivative.\n\n"
+            "Fix: re-register with both directions:\n\n"
+            "  from pymmeans import register_transform, Transform\n"
+            "  register_transform(\n"
+            f"      {transform!r},\n"
+            f"      TRANSFORMS[{transform!r}],   # existing back-transform\n"
+            "      forward=...,                 # response -> new scale\n"
+            "      forward_deriv=...,           # d(forward)/dx\n"
+            "      overwrite=True,\n"
+            "  )"
+        )
+    # Anything else (parametric families, bare callable): explicit
+    # not-yet-implemented to avoid silently returning an EMM with the
+    # wrong .type tag.
     raise NotImplementedError(
         f"regrid(transform={transform!r}) is not implemented in v0.1. "
-        "Supported aliases are: 'response' / 'mu' / 'unlink' (all "
-        "synonymous; back-transform to response scale), 'pass' / "
-        "'none' / None (no-op). To switch to a different link "
-        "representation (e.g. 'log'), back-transform with "
-        "regrid_response() first, then re-fit the model with the "
-        "desired LHS transform."
+        f"Supported aliases:\n"
+        f"  - 'response' / 'mu' / 'unlink' — back-transform to "
+        f"response scale (calls regrid_response).\n"
+        f"  - 'pass' / 'none' / None — no-op.\n"
+        f"  - named forwards: {sorted(_FORWARD)} — apply that "
+        f"transform's forward to the response-scale predictions.\n"
+        f"Parametric families (boxcox / genlog / power / yj.power "
+        f"/ ...) and user-built Transform instances as the target "
+        f"are deferred to 0.2.0. Workaround: regrid to response "
+        f"first, then build the forward output manually via "
+        f"``Transform.inverse`` evaluated on the response-scale "
+        f"predictions, with a delta-method SE update."
     )
+
+
+def _regrid_to_named_scale(
+    emm_or_contrast: Any,
+    target_name: str,
+    *,
+    bias_adjust: bool,
+    force: bool,
+) -> Any:
+    """Apply the named transform's forward to a (possibly link-scale)
+    EMM, returning an EMM on the new scale.
+
+    Implementation strategy: reuse :func:`regrid_response` by passing
+    a synthetic ``Transform`` whose ``inverse`` field carries our
+    NEW transform's *forward* and whose ``inverse_deriv`` carries
+    the *forward* derivative. From regrid_response's point of view
+    it is "applying ``inverse`` to a link-scale value to produce a
+    response-scale value" — the math is identical regardless of
+    which direction the user thinks of as "link" vs "response".
+    """
+    if target_name not in _FORWARD:
+        # Should never reach here — caller checks; defensive.
+        raise NotImplementedError(
+            f"_regrid_to_named_scale: {target_name!r} is not in the "
+            f"forward registry."
+        )
+    fwd, fwd_deriv = _FORWARD[target_name]
+    # If the input is on the link scale, normalise to response first
+    # so the new forward is applied to the predicted response values
+    # (matching R `regrid(em, transform="log")` semantics).
+    #
+    # Only call ``regrid_response`` when the model genuinely has
+    # something to back-transform — a non-identity GLM link OR a LHS
+    # transform on the response. For a plain identity-link OLS
+    # (``family=None``, untransformed ``y``) the link scale IS the
+    # response scale, and ``regrid_response`` would raise "No
+    # transform recognised from response 'y'" instead of no-opping.
+    # In that case we apply the forward directly to the link-scale
+    # values.
+    em = emm_or_contrast
+    if getattr(em, "type", "link") == "link":
+        info = getattr(em, "model_info", None)
+        needs_response_normalize = False
+        if info is not None:
+            rname = getattr(info, "response_name", None)
+            if isinstance(rname, str) and detect_transform(rname) is not None:
+                needs_response_normalize = True
+            fam = getattr(info, "family", None)
+            if fam is not None:
+                link_name = type(
+                    getattr(fam, "link", None)
+                ).__name__.lower()
+                # NoneType (no link attr) and identity both mean
+                # "response scale == link scale".
+                if link_name not in ("identity", "nonetype"):
+                    needs_response_normalize = True
+        if needs_response_normalize:
+            em = regrid_response(em, bias_adjust=bias_adjust, force=force)
+    # Synthetic transform: ``inverse`` = our new forward;
+    # ``inverse_deriv`` = derivative of the new forward.
+    # ``bias_mean`` / ``bias_deriv`` left None — applying a
+    # bias-adjust on top of an already-bias-adjusted response would
+    # double-correct.
+    synthetic = Transform(
+        name=target_name,
+        inverse=fwd,
+        inverse_deriv=fwd_deriv,
+        bias_mean=None,
+        is_log=False,
+        bias_deriv=None,
+    )
+    # ``force=True`` because ``em`` is now type="response" and
+    # regrid_response would otherwise refuse the second pass; the
+    # safety guard exists for the wrong-direction case (calling
+    # regrid_response twice with the model's own inverse), which
+    # isn't what's happening here.
+    return regrid_response(em, tran=synthetic, force=True)

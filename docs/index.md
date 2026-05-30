@@ -32,7 +32,7 @@ print(pairs(emmeans(model, "fertilizer")))
 
 ## Status
 
-Beta (v0.1.8). Feature-complete for the v0.1 surface. Validated
+Beta (v0.2.0). Feature-complete for the v0.2 surface. Validated
 against the canonical R `emmeans` reference at `atol=1e-4` on 18
 reference comparisons spanning OLS, GLM, MixedLM, GEE, Cox PH,
 beta regression, response-scale, by-grouped, and factor-from-numeric

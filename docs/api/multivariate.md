@@ -1,0 +1,3 @@
+# `pymmeans.multivariate`
+
+::: pymmeans.multivariate

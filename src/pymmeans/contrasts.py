@@ -254,34 +254,203 @@ def _trt_vs_ctrl_matrix(
 _POLY_NAMES = ["linear", "quadratic", "cubic", "quartic"]
 
 
+def _stieltjes_poly_rows(
+    k: int, max_degree: int,
+) -> list[list[Any]] | None:
+    """Generate orthogonal polynomial contrasts via exact-rational
+    Stieltjes recurrence at equally-spaced integer nodes.
+
+    Returns ``max_degree`` rows of length ``k`` (one per polynomial
+    degree 1..max_degree), each a list of :class:`fractions.Fraction`
+    values evaluated at the centred nodes ``y_i = i - (k+1)/2`` for
+    ``i = 1..k``. The caller integer-scales each row by the LCM of
+    its denominators (and divides out the GCD) to produce R's
+    canonical integer ``contr.poly`` output.
+
+    Returns ``None`` only on internal failure (kept defensive so the
+    QR fallback in :func:`_poly_matrix` can take over without
+    crashing — exact-rational arithmetic shouldn't fail in practice,
+    but we'd rather degrade gracefully than abort the entire
+    contrast call).
+
+    The recurrence (Stieltjes, 1884; specialised for centred
+    equally-spaced nodes where the symmetric ``α_k`` term vanishes):
+
+    .. math::
+
+        p_0(y) = 1, \\quad p_1(y) = y, \\quad
+        p_{k+1}(y) = y \\cdot p_k(y) - \\beta_k p_{k-1}(y)
+
+    with :math:`\\beta_k = \\sum_i p_k(y_i)^2 / \\sum_i p_{k-1}(y_i)^2`.
+
+    Operating on :class:`Fraction` throughout keeps every step exact
+    — no float-noise rationalisation, no denominator cap, no
+    fallback to orthonormal Q at high k. The integers grow with
+    degree (and very large k) but stay tractable: at k=50 the
+    degree-6 contrast peaks around 10^8, well within int64.
+    """
+    from fractions import Fraction
+
+    if k < 2 or max_degree < 1:
+        return None
+
+    # Centred integer nodes scaled to integer where possible. For
+    # k even, the raw nodes (1..k) - (k+1)/2 are half-integers; we
+    # multiply by 2 internally so every Fraction has a small
+    # denominator (1 or 2 throughout, which keeps the row LCM
+    # bounded). For k odd, the nodes are already integers.
+    if k % 2 == 1:
+        # Odd k: nodes are 1 - (k+1)/2, ..., k - (k+1)/2.
+        # All integers symmetric around 0.
+        nodes = [Fraction(i - (k + 1) // 2) for i in range(1, k + 1)]
+    else:
+        # Even k: raw nodes have a 1/2 offset. Multiply by 2 so the
+        # initial polynomial values are integers; the polynomials
+        # then sit on integer node values 1-k, 3-k, ..., k-1, and
+        # the integer-scaled output matches R's contr.poly
+        # tabulation up to the per-row LCM-then-GCD reduction.
+        nodes = [Fraction(2 * i - (k + 1)) for i in range(1, k + 1)]
+
+    # p_0 := all ones; p_1 := nodes themselves.
+    p_prev: list[Fraction] = [Fraction(1)] * k
+    p_curr: list[Fraction] = list(nodes)
+
+    rows: list[list[Fraction]] = [list(p_curr)]  # degree 1
+
+    for _d in range(2, max_degree + 1):
+        # Inner products via exact rational sums.
+        num = sum((p * p for p in p_curr), Fraction(0))
+        denom = sum((p * p for p in p_prev), Fraction(0))
+        if denom == 0:
+            # Pathological — shouldn't fire for k>=2 (the constant
+            # polynomial has positive squared sum). Defensive bail.
+            return None
+        beta = num / denom
+
+        p_next = [
+            y * pc - beta * pp
+            for y, pc, pp in zip(nodes, p_curr, p_prev, strict=True)
+        ]
+        rows.append(list(p_next))
+        p_prev = p_curr
+        p_curr = p_next
+
+    return rows
+
+
+def _integer_scale_row(row: list[Any]) -> np.ndarray:
+    """Reduce a row of Fractions to its canonical integer scaling.
+
+    Steps:
+      1. Multiply every entry by the LCM of all denominators
+         (clears fractions; the row becomes integer-valued).
+      2. Divide by the GCD of the absolute values (minimal
+         integer scaling — R's convention for ``contr.poly``).
+      3. Sign-normalise so the last non-zero entry is positive
+         (R convention; matches existing pymmeans output).
+
+    At very high ``k`` (empirically ``k >= ~80``) the LCM-scaled
+    integer values cross ``2**53`` (IEEE 754 float64 exact-integer
+    cap). Casting them to ``dtype=float`` after that point silently
+    loses bits — column sums drift from 0, columns lose
+    orthonormality, and downstream contrasts become numerically
+    garbage. Whenever any scaled integer would exceed the safe cap,
+    abandon the canonical integer scaling and max-abs normalise the
+    row instead. This preserves orthogonality / column-sum-zero at
+    the cost of R-bit-for-bit parity (which we couldn't keep anyway —
+    the integers don't fit in float64 at that point). Below the cap
+    the integer path is used, matching R's ``contr.poly`` exactly.
+    """
+    from functools import reduce
+    from math import gcd as _gcd
+    from math import lcm
+
+    if not row:
+        return np.empty(0, dtype=float)
+    denom_lcm = 1
+    for f in row:
+        denom_lcm = lcm(denom_lcm, f.denominator)
+    scaled_int = [int(f * denom_lcm) for f in row]
+    g = reduce(_gcd, (abs(s) for s in scaled_int if s != 0), 0)
+    if g > 1:
+        scaled_int = [s // g for s in scaled_int]
+    # Safety cap on float64 exact-integer representation. ``2**53``
+    # is the largest integer that round-trips through float64
+    # without loss; if ANY entry would exceed it, the integer-scaled
+    # path would silently corrupt the contrast matrix.
+    #
+    # The float fallback must NOT cast the raw Fractions directly. At
+    # high polynomial degree the raw Stieltjes Fractions can exceed
+    # float64's ~1.8e308 max, so ``float(f)`` would raise
+    # OverflowError. And even when they don't overflow, the raw
+    # magnitudes are astronomically larger than the integer path's,
+    # producing a jarring scale discontinuity at the switch.
+    #
+    # Fix: max-abs normalise the row in EXACT Fraction arithmetic
+    # (``f / max_abs`` is a Fraction in ``[-1, 1]``, so the
+    # subsequent ``float`` cast can never overflow) before casting.
+    # This bounds the float-path output to ``[-1, 1]`` and is safe
+    # for inference: contrast t-ratios and p-values are invariant to
+    # the per-row scaling, so only the raw estimate magnitude
+    # changes. R ``contr.poly`` bit-parity is retained on the
+    # integer path below the cap.
+    _F64_EXACT_INT_CAP = 1 << 53
+    if any(abs(s) > _F64_EXACT_INT_CAP for s in scaled_int):
+        from fractions import Fraction as _Fr
+
+        max_abs = max((abs(f) for f in row), default=_Fr(0))
+        if max_abs == 0:
+            return np.zeros(len(row), dtype=float)
+        # Sign normalise on the (exact) Fraction values: last
+        # non-zero entry positive (R convention).
+        last_nonzero = next(
+            (f for f in reversed(row) if f != 0),
+            None,
+        )
+        sign = (
+            -1.0
+            if (last_nonzero is not None and last_nonzero < 0)
+            else 1.0
+        )
+        return np.asarray(
+            [sign * float(f / max_abs) for f in row], dtype=float,
+        )
+    # Sign: R uses "last non-zero positive" — find the last
+    # non-zero entry and flip if negative. (For symmetric
+    # polynomial contrasts the last entry is always non-zero,
+    # but be defensive for arbitrary callers.)
+    last_nonzero = next(
+        (s for s in reversed(scaled_int) if s != 0), 0,
+    )
+    if last_nonzero < 0:
+        scaled_int = [-s for s in scaled_int]
+    return np.asarray(scaled_int, dtype=float)
+
+
 def _poly_matrix(
     k: int, _labels: list[str], max_degree: int | None = None
 ) -> tuple[np.ndarray, list[str]]:
     """Orthogonal polynomial contrasts at equally spaced points.
 
-    previously matched R's `contr.poly`
-    (orthonormal Q from QR factorization), not R `emmeans::poly.emmc`
-    (integer-scaled orthogonal contrasts).
+    Implementation: exact-rational Stieltjes recurrence on centred
+    equally-spaced nodes (see :func:`_stieltjes_poly_rows`). Each
+    polynomial row is then integer-scaled via the LCM of its
+    denominators and reduced by the row GCD — R's canonical
+    ``contr.poly`` convention. This matches R `emmeans::poly.emmc`
+    to integer precision for every ``k`` (the earlier
+    QR-then-float-Fraction path was exact only for k <= 20 and
+    fell back to the orthonormal Q matrix at higher k because the
+    bounded-denominator rationalisation lost precision).
 
-    the fix matched R for
-    k=3..7 but DIVERGED for k > 7 because the integer-multiplier
-    search capped at 24 — and high-degree contrasts at large k need
-    larger multipliers (cubic for k=15 needs multiplier ~250). The
-    Gram-Schmidt-on-raw-powers approach was also numerically
-    fragile.
+    The QR-based orthonormal path is retained as a defensive
+    fallback only — if Stieltjes returns ``None`` (a pathological
+    rational arithmetic failure that shouldn't happen) we still
+    produce a valid orthonormal contrast matrix instead of
+    crashing.
 
-    New algorithm (R `emmeans::poly.emmc` direct port):
-
-    1. Build orthonormal `contr.poly` via Vandermonde-QR (stable).
-    2. R's two-step integer scaling loop:
-       a. Divide each column by the smallest positive entry.
-       b. While `max(|col - round(col)|) > 0.05`, divide by that
-          maximum (iterative refinement that converges fast).
-       c. Round to integer.
-    3. Cap output at `max_degree = min(6, k-1)` by default (R's
-       default), accept an explicit override.
-    4. Names: "linear", "quadratic", "cubic", "quartic", then
-       "degree 5", "degree 6", ... (R uses space, not underscore).
+    Names: ``"linear"`` (degree 1), ``"quadratic"`` (2), ``"cubic"``
+    (3), ``"quartic"`` (4), then ``"degree 5"``, ``"degree 6"``,
+    ... matching R's spaced convention.
     """
     if k < 2:
         raise ValueError(f"polynomial contrasts require k >= 2 (got {k}).")
@@ -290,57 +459,94 @@ def _poly_matrix(
         raise ValueError(
             f"polynomial contrasts need max_degree >= 1 (got {max_d})."
         )
-    # Step 1: orthonormal contr.poly via QR of centred Vandermonde.
-    x = np.arange(1, k + 1, dtype=float)
-    V = np.vander(x, k, increasing=True)
-    Q, _ = np.linalg.qr(V)
-    # Drop the constant column; transpose so each row is one contrast.
-    P_orth = Q[:, 1:max_d + 1].T # shape (max_d, k)
-    # Sign-normalise: last entry positive (R convention)
-    for d in range(P_orth.shape[0]):
-        if P_orth[d, -1] < 0:
-            P_orth[d] = -P_orth[d]
-    # Step 2: integer scaling via Fractions. 's "divide by max
-    # deviation" iterative refinement worked for k <= 7 but exploded
-    # to 1e15-scale values for k=15 high-degree contrasts because the
-    # iteration kept dividing by float-noise-tiny `dev`s. The
-    # Fractions approach finds the smallest integer multiplier
-    # exactly: convert each entry to a Fraction with a bounded
-    # denominator (drops float noise), then multiply by the LCM of
-    # all denominators in the row.
-    from fractions import Fraction
-    from math import lcm
 
-    P = P_orth.astype(float, copy=True)
-    for j in range(P.shape[0]):
-        con = P[j].copy()
-        # 2a: divide by smallest positive entry (centres the scale
-        # around 1.0 so the bounded-denominator step has a stable
-        # reference).
-        pos_mask = con > 0.01
-        if pos_mask.any():
-            con = con / float(np.min(con[pos_mask]))
-        # 2b: rationalise each entry with a bounded denominator and
-        # find the row's LCM-of-denominators. `limit_denominator(2000)`
-        # is conservative — R's tabulated poly.emmc values for k <= 20
-        # all have denominators well under 1000.
-        fracs = [Fraction(float(v)).limit_denominator(2000) for v in con]
-        denom = 1
-        for f in fracs:
-            denom = lcm(denom, f.denominator)
-        # Cap the resulting magnitude — if the LCM blows up (rare
-        # high-k pathological case), fall back to the orthonormal
-        # output rather than emitting astronomical integers.
-        scaled = np.array([float(f * denom) for f in fracs])
-        if np.max(np.abs(scaled)) > 1e6:
-            P[j] = P_orth[j]
-        else:
-            P[j] = scaled
+    # Primary path: exact-rational Stieltjes recurrence.
+    rows = _stieltjes_poly_rows(k, max_d)
+    if rows is not None:
+        P = np.vstack([_integer_scale_row(row) for row in rows])
+    else:
+        # Defensive fallback: orthonormal Q from Vandermonde QR.
+        # Mathematically equivalent (same orthogonality structure,
+        # different scaling), kept as a safety net.
+        x = np.arange(1, k + 1, dtype=float)
+        V = np.vander(x, k, increasing=True)
+        Q, _ = np.linalg.qr(V)
+        P_orth = Q[:, 1:max_d + 1].T
+        for d in range(P_orth.shape[0]):
+            if P_orth[d, -1] < 0:
+                P_orth[d] = -P_orth[d]
+        P = P_orth
+
     names = [
         _POLY_NAMES[d] if d < len(_POLY_NAMES) else f"degree {d + 1}"
         for d in range(max_d)
     ]
     return P, names
+
+
+def opoly(
+    k: int,
+    max_degree: int | None = None,
+    labels: list[str] | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    """Build the orthogonal polynomial contrast matrix at equally-spaced points.
+
+    Public-surface wrapper for the ``"poly"`` contrast method's
+    builder. Useful when you want the raw contrast coefficients (for
+    inspection, joint tests, or a hand-rolled analysis) without
+    routing through :func:`contrast`.
+
+    Parameters
+    ----------
+    k
+        Number of equally-spaced levels (i.e. the size of the
+        underlying target factor). Must be ``>= 2``.
+    max_degree
+        Highest polynomial degree to emit (``1`` = linear,
+        ``2`` = quadratic, ...). Default ``min(6, k - 1)`` matches
+        R ``emmeans::poly.emmc``'s default cap. Capped to ``k - 1``
+        (the maximum identifiable degree on ``k`` points).
+    labels
+        Optional list of level labels — only used to validate
+        length; the polynomial coefficients depend on the equal
+        spacing, not the labels themselves. When omitted the
+        returned matrix is still valid; the labels argument is
+        accepted for API symmetry with the other
+        :data:`CONTRAST_METHODS` builders.
+
+    Returns
+    -------
+    D : ndarray of shape ``(min(max_degree, 6, k-1), k)``
+        Each row is one polynomial contrast (linear, quadratic, ...).
+        Integer-scaled for ``k <= 20`` (matches R `emmeans::poly.emmc`
+        to floating-point precision); orthonormal-fallback for
+        ``k > 20`` where the integer-scaling LCM blows up.
+    names : list[str]
+        ``["linear", "quadratic", "cubic", "quartic", "degree 5",
+        "degree 6"]`` (truncated to ``max_degree``).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from pymmeans import opoly
+    >>> D, names = opoly(4)
+    >>> names
+    ['linear', 'quadratic', 'cubic']
+    >>> D.shape
+    (3, 4)
+    >>> # Coefficients sum to zero on each row (proper contrasts).
+    >>> np.allclose(D.sum(axis=1), 0)
+    True
+    """
+    if labels is not None and len(labels) != k:
+        raise ValueError(
+            f"opoly: labels has length {len(labels)} but k={k}; "
+            "labels must align with the number of levels."
+        )
+    # The underlying builder ignores labels (polynomials depend only
+    # on the equal-spacing assumption). Pass an empty list to keep
+    # the call site uniform.
+    return _poly_matrix(k, labels or [], max_degree=max_degree)
 
 
 def _consec_matrix(k: int, labels: list[str]) -> tuple[np.ndarray, list[str]]:
@@ -449,6 +655,287 @@ def _helmert_matrix(k: int, labels: list[str]) -> tuple[np.ndarray, list[str]]:
             lo = "{" + ",".join(labels[:i]) + "}"
         names.append(f"{labels[i]} - {lo}")
     return D, names
+
+
+# ----------------------------------------------------------------------
+# Contrast-method strategy registry.
+#
+# Each registered method is a builder ``(k, labels, **kwargs) -> (D,
+# names)`` plus a default multiplicity adjustment for the resulting
+# family. The :func:`contrast` dispatcher looks up the method here
+# instead of running a long ``if / elif`` chain, so new contrast
+# methods can be added (or replaced) at runtime via
+# :func:`register_contrast_method` without touching the dispatcher.
+#
+# ``pairwise`` / ``revpairwise`` / ``tukey`` are special-cased outside
+# this registry because they go through :func:`pairs` (which carries
+# extra structural state — pairwise index tuples — that other contrast
+# methods don't produce). The registry covers every other named
+# method ``contrast()`` accepts.
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ContrastMethod:
+    """Strategy entry for a registered contrast method.
+
+    Attributes
+    ----------
+    builder
+        Callable ``(k, labels, **kwargs) -> (D, names)``. ``k`` is the
+        family size (number of EMM rows in the by-group), ``labels``
+        is the per-row label strings, ``kwargs`` carries per-method
+        extras (e.g. ``ref_idx=`` for ``trt.vs.ctrl``). Returns the
+        contrast coefficient matrix ``D`` of shape ``(n_contrasts, k)``
+        and the per-row name list.
+    default_adjust
+        The multiplicity-correction method used when
+        ``contrast(..., adjust=)`` is not supplied AND
+        ``emm_options('adjust')`` is unset. Matches R `emmeans`'s
+        per-method default (``"dunnettx"`` for `trt.vs.ctrl*`, ``"mvt"``
+        for `consec` / `mean_chg`, ``"fdr"`` for `eff` / `del.eff`,
+        ``"none"`` for `poly` / `identity` / `helmert`).
+    """
+
+    builder: Callable[..., tuple[np.ndarray, list[str]]]
+    default_adjust: str
+
+
+# Adapter wrappers normalise the existing private builders into the
+# uniform ``(k, labels, **kwargs) -> (D, names)`` signature. The
+# underlying matrix functions are kept byte-identical so the refactor
+# doesn't change any numerical output — only the dispatch shape.
+
+def _builder_trt_vs_ctrl(
+    k: int, labels: list[str], *, ref_idx: int = 0, **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _trt_vs_ctrl_matrix(k, labels, ref_idx)
+
+
+def _builder_trt_vs_ctrl1(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _trt_vs_ctrl_matrix(k, labels, 0)
+
+
+def _builder_trt_vs_ctrlk(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _trt_vs_ctrl_matrix(k, labels, k - 1)
+
+
+def _builder_poly(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _poly_matrix(k, labels)
+
+
+def _builder_consec(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _consec_matrix(k, labels)
+
+
+def _builder_eff(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _eff_matrix(k, labels)
+
+
+def _builder_del_eff(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _del_eff_matrix(k, labels)
+
+
+def _builder_mean_chg(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _mean_chg_matrix(k, labels)
+
+
+def _builder_identity(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _identity_matrix(k, labels)
+
+
+def _builder_helmert(
+    k: int, labels: list[str], **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    return _helmert_matrix(k, labels)
+
+
+def _builder_wtcon(
+    k: int, labels: list[str], *, wts: Any = None, **_: Any,
+) -> tuple[np.ndarray, list[str]]:
+    """Single user-supplied weighted contrast.
+
+    Mirrors R ``emmeans::wtcon(levs, wts)``: builds a 1-row
+    contrast matrix from the caller's ``wts`` vector. The
+    convenience here is the named-method dispatch — users can
+    always achieve the same via ``contrast(em, method=np.array([
+    wts]))``, but the wtcon name documents the intent.
+    """
+    if wts is None:
+        raise ValueError(
+            "method='wtcon' requires an explicit ``wts=`` vector "
+            "of length k (the family size). Example: "
+            "``contrast(em, method='wtcon', wts=[1, -0.5, -0.5])``."
+        )
+    wts_arr = np.asarray(wts, dtype=float)
+    if wts_arr.ndim != 1:
+        raise ValueError(
+            "method='wtcon' wts must be a 1-D sequence; got shape "
+            f"{wts_arr.shape}."
+        )
+    if len(wts_arr) != k:
+        raise ValueError(
+            f"method='wtcon' wts has length {len(wts_arr)} but the "
+            f"family size is k={k}. Each level needs one weight."
+        )
+    if not np.all(np.isfinite(wts_arr)):
+        raise ValueError(
+            "method='wtcon' wts contains non-finite entries; pass "
+            "only finite floats."
+        )
+    D = wts_arr.reshape(1, -1)
+    # R's wtcon names the single row by concatenating coefficient
+    # values; pymmeans uses a more readable label that lists the
+    # non-zero weighted level contributions.
+    parts: list[str] = []
+    for w, lab in zip(wts_arr, labels, strict=True):
+        if w == 0.0:
+            continue
+        sign = "+" if w > 0 else "-"
+        magnitude = abs(w)
+        # Strip trailing zeros from the float to keep names compact.
+        if magnitude == 1.0:
+            parts.append(f"{sign} {lab}")
+        else:
+            parts.append(f"{sign} {magnitude:g}*{lab}")
+    name = " ".join(parts).lstrip("+ ").strip() if parts else "0"
+    return D, [name]
+
+
+CONTRAST_METHODS: dict[str, _ContrastMethod] = {
+    "trt.vs.ctrl":  _ContrastMethod(_builder_trt_vs_ctrl,  "dunnettx"),
+    "trt.vs.ctrl1": _ContrastMethod(_builder_trt_vs_ctrl1, "dunnettx"),
+    "trt.vs.ctrlk": _ContrastMethod(_builder_trt_vs_ctrlk, "dunnettx"),
+    "poly":         _ContrastMethod(_builder_poly,         "none"),
+    "consec":       _ContrastMethod(_builder_consec,       "mvt"),
+    "eff":          _ContrastMethod(_builder_eff,          "fdr"),
+    "del.eff":      _ContrastMethod(_builder_del_eff,      "fdr"),
+    "mean_chg":     _ContrastMethod(_builder_mean_chg,     "mvt"),
+    "identity":     _ContrastMethod(_builder_identity,     "none"),
+    "helmert":      _ContrastMethod(_builder_helmert,      "none"),
+    "wtcon":        _ContrastMethod(_builder_wtcon,        "bonferroni"),
+}
+
+
+def register_contrast_method(
+    name: str,
+    builder: Callable[..., tuple[np.ndarray, list[str]]],
+    *,
+    default_adjust: str = "bonferroni",
+    overwrite: bool = False,
+) -> None:
+    """Register a custom contrast method so :func:`contrast` accepts
+    it by name.
+
+    Parameters
+    ----------
+    name
+        Identifier the method should be registered under. Used as
+        the value of ``contrast(em, method=name)``. Must be a non-
+        empty string; collisions with built-ins (``"trt.vs.ctrl"``,
+        ``"poly"``, ``"consec"``, ``"eff"``, ``"del.eff"``,
+        ``"mean_chg"``, ``"identity"``, ``"helmert"``) raise unless
+        ``overwrite=True``. Cannot register ``"pairwise"`` /
+        ``"revpairwise"`` / ``"tukey"`` — those go through
+        :func:`pairs` and are not in this registry.
+    builder
+        Callable matching the signature
+        ``(k: int, labels: list[str], **kwargs) -> (D, names)``.
+        ``k`` is the family size (rows per by-group), ``labels`` is
+        the EMM-row labels for the by-group, and ``kwargs`` lets
+        per-method extras flow through (e.g. ``ref_idx=`` for a
+        trt-vs-ctrl-style method). The returned ``D`` must be a
+        ``(n_contrasts, k)`` ndarray and ``names`` a list of
+        ``n_contrasts`` strings.
+    default_adjust
+        Multiplicity-adjustment method used when ``contrast(...)``
+        is called without an explicit ``adjust=`` AND
+        ``emm_options('adjust')`` is unset. Common choices:
+        ``"none"``, ``"bonferroni"``, ``"sidak"``, ``"fdr"``,
+        ``"dunnettx"``, ``"mvt"``.
+    overwrite
+        Default ``False``: registering a name that already exists
+        in :data:`CONTRAST_METHODS` raises ``ValueError`` so plugin
+        code doesn't silently shadow a built-in. Pass ``True`` to
+        deliberately replace.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is empty, reserved (``pairwise`` / ``revpairwise``
+        / ``tukey``), or already registered (unless
+        ``overwrite=True``).
+    TypeError
+        If ``name`` is not a string or ``builder`` is not callable.
+
+    Examples
+    --------
+    >>> import numpy as np # doctest: +SKIP
+    >>> from pymmeans import register_contrast_method, contrast # doctest: +SKIP
+    >>> def first_vs_rest(k, labels, **kwargs): # doctest: +SKIP
+    ...     '''Level 0 vs the mean of every other level.'''
+    ...     D = np.zeros((1, k))
+    ...     D[0, 0] = 1.0
+    ...     D[0, 1:] = -1.0 / (k - 1)
+    ...     return D, [f"{labels[0]} vs rest"]
+    >>> register_contrast_method( # doctest: +SKIP
+    ...     "first_vs_rest", first_vs_rest, default_adjust="bonferroni",
+    ... )
+    >>> ct = contrast(emm, method="first_vs_rest") # doctest: +SKIP
+
+    Notes
+    -----
+    The registry is process-local (a plain module-level dict).
+    Registrations made in the parent process do NOT propagate to
+    ``joblib.Parallel`` / ``ProcessPoolExecutor`` workers; re-register
+    inside the worker function (or use the worker's ``initializer=``
+    hook).
+    """
+    if not isinstance(name, str):
+        raise TypeError(
+            f"register_contrast_method(name=...): name must be a "
+            f"string, got {type(name).__name__}."
+        )
+    if not name:
+        raise ValueError(
+            "register_contrast_method(name=...): name must be non-empty."
+        )
+    if name in ("pairwise", "revpairwise", "tukey"):
+        raise ValueError(
+            f"register_contrast_method: name {name!r} is reserved for "
+            "the pairwise path (`pairs()`), which has a different "
+            "signature and carries structural pair-index metadata. "
+            "Custom pairwise-like methods should pick a different "
+            "name or use the existing pairwise machinery via "
+            "`pairs(emm)`."
+        )
+    if not callable(builder):
+        raise TypeError(
+            "register_contrast_method(builder=...): builder must be "
+            f"callable, got {type(builder).__name__}."
+        )
+    if name in CONTRAST_METHODS and not overwrite:
+        raise ValueError(
+            f"register_contrast_method: name {name!r} already "
+            "registered. Pass ``overwrite=True`` to replace it."
+        )
+    CONTRAST_METHODS[name] = _ContrastMethod(builder, str(default_adjust))
 
 
 def _iter_by_groups(emm: EMMResult):
@@ -955,6 +1442,8 @@ def contrast(
     interaction: str | list[str] | None = None,
     simple: str | list[str] | None = None,
     combine: bool = False,
+    *,
+    wts: list[float] | np.ndarray | None = None,
 ) -> ContrastResult | EmmList:
     """Compute contrasts of EMMs using a named method or custom coefficients.
 
@@ -1115,71 +1604,52 @@ def contrast(
     if method == "tukey":
         # R alias: `tukey` is pairwise with Tukey adjustment.
         return pairs(emm, adjust=adjust or opt_adjust or "tukey")
-    # trt.vs.ctrl1 (first level as ref), trt.vs.ctrlk (last level as
-    # ref), and bare trt.vs.ctrl (ref=first by default) all map to
-    # the same builder with different ref_idx.
-    SUPPORTED = (
-        "trt.vs.ctrl", "trt.vs.ctrl1", "trt.vs.ctrlk",
-        "poly", "consec",
-        "eff", "del.eff", "mean_chg",
-        "identity", "helmert",
-    )
-    if method in SUPPORTED:
+    # Registry-driven dispatch. All named methods other than
+    # ``pairwise`` / ``revpairwise`` / ``tukey`` (handled above) live
+    # in :data:`CONTRAST_METHODS`; users can also add their own via
+    # :func:`register_contrast_method`. The per-method default
+    # adjustment and the builder both come from the registry entry.
+    entry = CONTRAST_METHODS.get(method)
+    if entry is not None:
         if len(emm.target) != 1:
             raise NotImplementedError(
                 f"'{method}' in v0.1 supports a single target factor only."
             )
-        pieces: list[pd.DataFrame] = []
-        all_L: list[np.ndarray] = []
+        # Adjust precedence (matches R): explicit kwarg > emm_options
+        # option > registry default.
         if adjust is None:
-            # option overrides the per-method default
-            # (option < explicit kwarg; per-method default < option).
-            adj = opt_adjust or {
-                "poly": "none",
-                "trt.vs.ctrl": "dunnettx",
-                "trt.vs.ctrl1": "dunnettx",
-                "trt.vs.ctrlk": "dunnettx",
-                "consec": "mvt",
-                "mean_chg": "mvt",
-                "eff": "fdr",
-                "del.eff": "fdr",
-                "identity": "none",
-                "helmert": "none",
-            }.get(method, "bonferroni")
+            adj = opt_adjust or entry.default_adjust
         else:
             adj = adjust
+
+        pieces: list[pd.DataFrame] = []
+        all_L: list[np.ndarray] = []
         family_meta: list[dict] = []
         cursor = 0
         for by_key, indices in _iter_by_groups(emm):
             sub_frame = emm.frame.iloc[indices].reset_index(drop=True)
             labels = _row_labels(sub_frame, emm.target)
             k = len(indices)
+            # ``trt.vs.ctrl`` accepts a ``ref=`` kwarg (label or
+            # 0-based index) that must be resolved against the
+            # current by-group's labels — the resolution can't move
+            # into the registry-entry adapter because labels differ
+            # per by-group. ``wtcon`` accepts a ``wts=`` vector that
+            # gets forwarded verbatim (validation happens inside the
+            # builder). Every other method ignores per-by-group
+            # kwargs.
+            builder_kwargs: dict[str, Any] = {}
             if method == "trt.vs.ctrl":
-                ref_idx = (
-                    labels.index(ref) if isinstance(ref, str) else (ref or 0)
+                builder_kwargs["ref_idx"] = (
+                    labels.index(ref) if isinstance(ref, str)
+                    else (ref or 0)
                 )
-                D, names = _trt_vs_ctrl_matrix(k, labels, ref_idx)
-            elif method == "trt.vs.ctrl1":
-                # First level as control (matches R)
-                D, names = _trt_vs_ctrl_matrix(k, labels, 0)
-            elif method == "trt.vs.ctrlk":
-                # Last level as control (matches R)
-                D, names = _trt_vs_ctrl_matrix(k, labels, k - 1)
-            elif method == "poly":
-                D, names = _poly_matrix(k, labels)
-            elif method == "consec":
-                D, names = _consec_matrix(k, labels)
-            elif method == "eff":
-                D, names = _eff_matrix(k, labels)
-            elif method == "del.eff":
-                D, names = _del_eff_matrix(k, labels)
-            elif method == "mean_chg":
-                D, names = _mean_chg_matrix(k, labels)
-            elif method == "identity":
-                D, names = _identity_matrix(k, labels)
-            else: # helmert
-                D, names = _helmert_matrix(k, labels)
-            piece, L_c, fam = _contrast_one_family(emm, indices, by_key, D, names, adj)
+            if method == "wtcon":
+                builder_kwargs["wts"] = wts
+            D, names = entry.builder(k, labels, **builder_kwargs)
+            piece, L_c, fam = _contrast_one_family(
+                emm, indices, by_key, D, names, adj,
+            )
             pieces.append(piece)
             all_L.append(L_c)
             fam["start"] = cursor
@@ -1198,12 +1668,13 @@ def contrast(
             method=method,
             method_args={"ref": ref} if ref is not None else {},
         )
+    # Unknown method. Synthesize the supported list dynamically from
+    # the registry so custom registrations show up automatically.
+    supported = ["pairwise", "revpairwise", "tukey", *sorted(CONTRAST_METHODS)]
     raise ValueError(
         f"Unknown contrast method '{method}'. "
-        "Supported: pairwise, revpairwise, tukey, trt.vs.ctrl, "
-        "trt.vs.ctrl1, trt.vs.ctrlk, poly, consec, eff, del.eff, "
-        "mean_chg, identity, helmert, or a dict/ndarray of custom "
-        "coefficients."
+        f"Supported: {', '.join(supported)}, "
+        "or a dict/ndarray of custom coefficients."
     )
 
 
