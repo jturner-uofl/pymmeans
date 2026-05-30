@@ -155,6 +155,29 @@ wcsv(data.frame(g = se$g, h = se$h, emmean = se$emmean, SE = se$SE,
                      nonEst = se$nonEst), p("estim_emm.csv"))
 cat("SECTION II done — nonEst:", sum(se$nonEst), "\n")
 
+# --- II.b: estimability STRESS test (auditor's question #1).
+# 3-way fractional factorial with THREE structural zeros — exercises the
+# Searle (1971) null-space-of-design check at higher rank-deficiency than
+# the single-empty-cell §II case.
+suppressMessages(library(estimability))
+set.seed(831)
+combos <- expand.grid(A = c("a1","a2","a3"), B = c("b1","b2","b3"),
+                      C = c("c1","c2"))
+combos <- combos[!(combos$A == "a1" & combos$B == "b3" & combos$C == "c1"), ]
+combos <- combos[!(combos$A == "a3" & combos$B == "b1" & combos$C == "c2"), ]
+combos <- combos[!(combos$A == "a2" & combos$B == "b3" & combos$C == "c2"), ]
+rows2 <- combos[rep(seq_len(nrow(combos)), each = 10), ]
+rows2$y <- rnorm(nrow(rows2)) + as.integer(rows2$A) * 0.2 +
+           as.integer(rows2$B) * 0.3
+wcsv(rows2, p("estim_stress_data.csv"))
+fit2 <- lm(y ~ A * B * C, data = rows2)
+em2 <- emm_sum(emmeans(fit2, ~ A * B * C))
+em2$nonEst <- is.na(em2$emmean) | is.nan(em2$emmean)
+wcsv(data.frame(A = em2$A, B = em2$B, C = em2$C,
+                emmean = em2$emmean, nonEst = em2$nonEst),
+     p("estim_stress_emm.csv"))
+cat("SECTION II.b done — nonEst stress:", sum(em2$nonEst), "of", nrow(em2), "\n")
+
 # ===========================================================================
 # SECTION III — Transformations (benchmark data)
 # ===========================================================================
@@ -282,6 +305,15 @@ if (requireNamespace("multcomp", quietly = TRUE)) {
   cldf$.group <- gsub(" ", "", as.character(cldf$.group))
   wcsv(data.frame(g = cldf$g, group = cldf$.group), p("cld.csv"))
 }
+# --- V.c: Tukey STRESS grid (auditor's question #2). Validate the
+# studentized-range adjustment across small df + large k corners.
+ks_t  <- c(3, 5, 10, 50, 100, 200)
+dfs_t <- c(3, 5, 10, 30, 1000)
+ts_t  <- c(0.5, 1.0, 2.0, 3.0, 4.0)
+rows_t <- expand.grid(k = ks_t, df = dfs_t, t = ts_t)
+rows_t$p_R <- 1 - ptukey(sqrt(2) * rows_t$t, rows_t$k, rows_t$df)
+wcsv(rows_t, p("tukey_stress_grid.csv"))
+cat("V.c (Tukey stress grid) done —", nrow(rows_t), "(k,df,t) cells\n")
 cat("SECTION V done\n")
 
 # ===========================================================================
