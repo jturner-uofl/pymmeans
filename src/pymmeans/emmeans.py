@@ -1602,6 +1602,13 @@ def emmeans(
 
     target = _as_list(specs)
     by_list = _as_list(by)
+    # Preserve the user-input spec names so the output frame's factor
+    # columns match what the caller asked for (rather than patsy's
+    # canonical expression name, e.g. "C(g, Sum)"). Without this, users
+    # who fit with non-default contrast coding hit `KeyError: 'g'` on
+    # `em.frame['g']` even though the EMMs themselves are correct.
+    _target_user_names = list(target)
+    _by_user_names = list(by_list)
 
     type = type.lower()
     if type not in ("link", "response"):
@@ -2378,7 +2385,21 @@ def emmeans(
     frame["lower_cl"] = lower
     frame["upper_cl"] = upper
 
+    # Rename canonical patsy factor names back to the user-input names so
+    # `em.frame[user_spec]` works under non-default contrast coding.
+    _rename_back = {}
+    for canon, user in zip(target + by_list,
+                           _target_user_names + _by_user_names, strict=True):
+        if canon != user and canon in frame.columns and user not in frame.columns:
+            _rename_back[canon] = user
+    if _rename_back:
+        frame = frame.rename(columns=_rename_back)
+        # Translate downstream column references so the rest of the
+        # pipeline sees the user-facing names too.
+        group_cols = [_rename_back.get(c, c) for c in group_cols]
+
     sort_cols = by_list + target
+    sort_cols = [_rename_back.get(c, c) for c in sort_cols]
     if sort_cols:
         frame = frame.sort_values(sort_cols, kind="stable").reset_index(drop=True)
         key_index = unique_keys.tolist()
@@ -2388,12 +2409,17 @@ def emmeans(
         ]
         L_marg = L_marg[order]
 
+    # Use user-facing names in the stored EMMResult so downstream
+    # `em.target` / `em.by` indexing reads the same columns the user sees
+    # in `em.frame`.
+    _stored_target = [_rename_back.get(c, c) for c in target]
+    _stored_by = [_rename_back.get(c, c) for c in by_list]
     return EMMResult(
         frame=frame,
         linfct=L_marg,
         model_info=info,
-        target=target,
-        by=by_list,
+        target=_stored_target,
+        by=_stored_by,
         level=level,
         type=type,
         at=dict(at) if at is not None else None,

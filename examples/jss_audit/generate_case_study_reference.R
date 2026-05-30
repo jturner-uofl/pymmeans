@@ -178,6 +178,31 @@ wcsv(data.frame(A = em2$A, B = em2$B, C = em2$C,
      p("estim_stress_emm.csv"))
 cat("SECTION II.b done — nonEst stress:", sum(em2$nonEst), "of", nrow(em2), "\n")
 
+# --- VII.7: non-default contrast coding (Sum / Poly) — auditor's Q4.
+# R uses contr.sum / contr.poly via options(contrasts=...); pymmeans
+# uses patsy's C(g, Sum) / C(g, Poly). Same model, different encoding;
+# the EMMs must match.
+set.seed(20260530)
+nx <- 120
+gn <- factor(sample(c("a","b","c"), nx, replace = TRUE))
+xn <- rnorm(nx)
+yn <- (gn == "b") * 0.5 + (gn == "c") * 1.0 + 0.3 * xn + rnorm(nx)
+dn <- data.frame(g = gn, x = xn, y = yn)
+wcsv(dn, p("contrast_coding_data.csv"))
+opts_save <- options(contrasts = c("contr.sum", "contr.poly"))
+fit_su <- lm(y ~ g + x, data = dn)
+em_su  <- as.data.frame(summary(emmeans(fit_su, ~ g)))
+options(opts_save)
+wcsv(data.frame(g = em_su$g, emmean = em_su$emmean, SE = em_su$SE),
+     p("contrast_sum_emm.csv"))
+opts_save2 <- options(contrasts = c("contr.poly", "contr.poly"))
+fit_po <- lm(y ~ g + x, data = dn)
+em_po  <- as.data.frame(summary(emmeans(fit_po, ~ g)))
+options(opts_save2)
+wcsv(data.frame(g = em_po$g, emmean = em_po$emmean, SE = em_po$SE),
+     p("contrast_poly_emm.csv"))
+cat("SECTION VII.7 done — Sum + Poly contrast coding refs\n")
+
 # ===========================================================================
 # SECTION III — Transformations (benchmark data)
 # ===========================================================================

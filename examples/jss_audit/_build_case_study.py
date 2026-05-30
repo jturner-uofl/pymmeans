@@ -1065,6 +1065,53 @@ print(f"  emmean (reordered)     : {np.round(em_reorder['emmean'].to_numpy(), 5)
 check("VII", "patsy column-mapping stability (post-fit reorder)", drift, 0.0, "exact")
 """)
 
+# ------------------------------------------------------------------- §VII.7
+md(r"""
+## VII.7 — Non-default contrast coding: Sum and Polynomial (auditor's question #4)
+
+The audit asks whether pymmeans handles non-standard contrast codings —
+specifically R's `contr.sum` (effects coding) and `contr.poly` (orthogonal
+polynomial contrasts) — without trivially crashing on a matrix-mul error.
+The answer is that the EMMs are mathematically *coding-invariant* (LS-means
+don't depend on the chosen contrast basis, only on the fitted model's
+column space), so we should expect agreement to machine precision under
+either coding. We prove it.
+
+`pymmeans` 0.2.2 also fixes a usability wart the audit surfaced: when the
+user passes `specs="g"` but the patsy formula was `C(g, Sum)`, prior
+versions returned the result frame with a column named `'C(g, Sum)'`
+instead of `'g'`. The EMMs were always correct; the column name now
+matches the user's input regardless of contrast coding.
+""")
+
+code(r"""
+dc = ref("contrast_coding_data.csv")
+dc["g"] = pd.Categorical(dc["g"])
+
+# Sum (effects) coding via patsy's C(g, Sum).
+fit_sum = smf.ols("y ~ C(g, Sum) + x", dc).fit()
+em_sum = emmeans(fit_sum, "g").frame.sort_values("g").reset_index(drop=True)
+r_sum = ref("contrast_sum_emm.csv").sort_values("g").reset_index(drop=True)
+check("VII", "sum-coded EMM vs R contr.sum",
+      maxabs(em_sum["emmean"], r_sum["emmean"]), 1e-9)
+check("VII", "sum-coded SE  vs R contr.sum",
+      maxabs(em_sum["SE"], r_sum["SE"]), 1e-9)
+assert "g" in em_sum.columns, "user-input spec name must be the frame column"
+
+# Polynomial-orthogonal coding via patsy's C(g, Poly).
+fit_poly = smf.ols("y ~ C(g, Poly) + x", dc).fit()
+em_poly = emmeans(fit_poly, "g").frame.sort_values("g").reset_index(drop=True)
+r_poly = ref("contrast_poly_emm.csv").sort_values("g").reset_index(drop=True)
+check("VII", "poly-coded EMM vs R contr.poly",
+      maxabs(em_poly["emmean"], r_poly["emmean"]), 1e-9)
+check("VII", "poly-coded SE  vs R contr.poly",
+      maxabs(em_poly["SE"], r_poly["SE"]), 1e-9)
+
+print(f"  C(g, Sum)  EMMs vs R contr.sum  - column name: 'g', max|Δ| ~ {maxabs(em_sum['emmean'], r_sum['emmean']):.2e}")
+print(f"  C(g, Poly) EMMs vs R contr.poly - column name: 'g', max|Δ| ~ {maxabs(em_poly['emmean'], r_poly['emmean']):.2e}")
+print("  LS-means are coding-invariant; pymmeans matches R to machine precision under either basis.")
+""")
+
 # ================================================================== §VIII
 md(r"""
 # Section VIII — Weighting sensitivity (the analyst's choice matters)
