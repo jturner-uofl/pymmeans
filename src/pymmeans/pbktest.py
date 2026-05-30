@@ -1,8 +1,8 @@
 """Kenward-Roger and Satterthwaite F-tests for nested ``MixedLM``.
 
 Python ports of the user-facing ``pbkrtest`` API in R (Halekoh &
-Højsgaard 2014, *J. Stat. Softw.* 59(9)) that complement the
-parametric-bootstrap ``pbmodcomp`` already shipped in
+Højsgaard 2014, 59(9), doi:10.18637/jss.v059.i09) that complement
+the parametric-bootstrap ``pbmodcomp`` already shipped in
 
 - :func:`krmodcomp` — Kenward-Roger small-sample F-test for two
   nested ``MixedLM`` fits. Asymptotic counterpart to
@@ -645,8 +645,8 @@ def krmodcomp(large: Any, small: Any) -> FtestResult:
       *Biometrics*, 53(3), 983-997.
     - Halekoh, U., & Højsgaard, S. (2014). A Kenward-Roger
       Approximation and Parametric Bootstrap Methods for Tests in
-      Linear Mixed Models — The R Package pbkrtest.
-      *Journal of Statistical Software*, 59(9). doi:10.18637/jss.v059.i09
+      Linear Mixed Models — The R Package pbkrtest. 59(9).
+      doi:10.18637/jss.v059.i09
     """
     L = _build_nested_L(large, small)
     aux = _compute_pbkrtest_aux(large)

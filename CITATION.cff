@@ -49,7 +49,6 @@ references:
       - family-names: Lenth
         given-names: Russell V.
     year: 2016
-    journal: "Journal of Statistical Software"
     volume: 69
     issue: 1
     doi: 10.18637/jss.v069.i01

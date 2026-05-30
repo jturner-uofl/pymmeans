@@ -1,7 +1,7 @@
 """Parametric-bootstrap model comparison for nested MixedLM fits.
 
 Python port of ``pbkrtest::PBmodcomp`` (Halekoh & Højsgaard 2014,
-*Journal of Statistical Software* 59(9)). Tests the null hypothesis
+59(9), doi:10.18637/jss.v059.i09). Tests the null hypothesis
 that the smaller (nested) of two linear mixed models is sufficient
 against the alternative that the larger model is needed, via the
 parametric bootstrap of the likelihood-ratio statistic under H_0.
@@ -503,8 +503,8 @@ def pbmodcomp(
     ----------
     - Halekoh, U., & Højsgaard, S. (2014). A Kenward-Roger
       Approximation and Parametric Bootstrap Methods for Tests in
-      Linear Mixed Models — The R Package pbkrtest.
-      *Journal of Statistical Software*, 59(9). doi:10.18637/jss.v059.i09
+      Linear Mixed Models — The R Package pbkrtest. 59(9).
+      doi:10.18637/jss.v059.i09
     - Davison, A. C., & Hinkley, D. V. (1997).
       *Bootstrap Methods and Their Application*. Cambridge UP.
 

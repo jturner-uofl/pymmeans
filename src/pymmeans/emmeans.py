@@ -2249,6 +2249,32 @@ def emmeans(
     elif info.estimability_basis is not None:
         estimable = estimable_mask_from_basis(L_marg, info.estimability_basis)
     else:
+        # auditor V12-A2 F3: contradicting the "we always run it" comment
+        # above, this fallback silently assumes every row is estimable
+        # when neither the live design matrix nor the precomputed
+        # null-space basis is available. Reachable via (a) pickled
+        # ``ModelInfo`` whose ``raw_result`` was dropped during round-
+        # trip, (b) hand-built ``ModelInfo`` objects in custom-adapter
+        # paths that did not populate ``estimability_basis``, or (c)
+        # ``qdrg`` constructor output (raw_result=None,
+        # estimability_basis=None). The silent assumption is replaced
+        # with an explicit warning so the caller can decide whether to
+        # trust the result.
+        import warnings
+
+        warnings.warn(
+            "Estimability check skipped: neither raw_result.model.exog "
+            "nor estimability_basis is available on this ModelInfo. "
+            "All EMM rows are assumed estimable; if the underlying "
+            "design is rank-deficient, non-estimable rows will silently "
+            "return numerically-meaningless values rather than NaN. "
+            "To remove the warning either (a) supply a raw_result with "
+            "a populated .model.exog (statsmodels results do this "
+            "automatically), or (b) precompute estimability_basis at "
+            "adapter time and store it on ModelInfo.",
+            UserWarning,
+            stacklevel=2,
+        )
         estimable = np.ones(L_marg.shape[0], dtype=bool)
     if not estimable.all():
         import warnings

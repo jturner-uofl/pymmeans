@@ -2073,11 +2073,10 @@ variance components. *Biometrics Bulletin*, 2(6), 110–114. ·
 Kenward, M. G., & Roger, J. H. (1997). Small sample inference for fixed
 effects from restricted maximum likelihood. *Biometrics*, 53(3), 983–997. ·
 Bates, D., Mächler, M., Bolker, B., & Walker, S. (2015). Fitting linear
-mixed-effects models using **lme4**. *Journal of Statistical Software*,
-67(1). ·
+mixed-effects models using **lme4**. 67(1), doi:10.18637/jss.v067.i01. ·
 Halekoh, U., & Højsgaard, S. (2014). A Kenward–Roger approximation and
 parametric bootstrap methods for tests in linear mixed models — the R
-package **pbkrtest**. *Journal of Statistical Software*, 59(9).
+package **pbkrtest**. 59(9), doi:10.18637/jss.v059.i09.
 
 **Multiplicity.**
 Dunnett, C. W. (1955). A multiple comparison procedure for comparing several

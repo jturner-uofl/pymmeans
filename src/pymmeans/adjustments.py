@@ -1037,8 +1037,25 @@ def _dunnettx(t_ratios: np.ndarray, df: float) -> np.ndarray:
 
     The weight ``twt = (k-1)/k`` is from R's source. Faster than exact
     MVT (no QMC integration), and historically R's default for
-    ``trt.vs.ctrl``. Calibrated to be within ~1e-3 of exact in the
-    relevant tail region for moderate k.
+    ``trt.vs.ctrl``.
+
+    Accuracy vs. exact rank-1 MVT (auditor V12-A2 F2 measurements,
+    df=30, t=3.5, h=sqrt(0.5)):
+
+    * ``k <= 10``  — absolute error ``~6e-4``
+    * ``k = 50``   — absolute error ``~1e-2``
+    * ``k = 200``  — absolute error ``~4e-2``
+    * ``k = 500``  — absolute error ``~7e-2``
+
+    The mixture interpolation is calibrated for small-``k`` Dunnett
+    families (the typical ``trt.vs.ctrl`` setting); at ``k >= 50`` the
+    closed-form approximation degrades visibly and the rank-1 exact
+    path (:func:`_dunnett_rank1_pvalue`, triggered for any rank-1
+    shared-control correlation) should be preferred when the
+    correlation structure is known. ``dunnettx`` remains the right
+    choice when (a) the correlation is not rank-1, or (b) the user
+    needs a finite-time answer at large ``k`` and is willing to
+    accept the documented bias.
     """
     from scipy import stats
 
