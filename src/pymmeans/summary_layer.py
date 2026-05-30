@@ -784,9 +784,19 @@ def summary(
     # (, #3, #4): handle scale changes.
     obj_type = getattr(obj, "type", "link")
     requested_type = type if type is not None else obj_type
-    if requested_type not in ("link", "response"):
+    # Adapters for non-canonical families (multinomial, ordinal) stamp
+    # their own scale labels on the EMMResult (``"prob"``, ``"latent"``,
+    # ``"cum.prob"``) and the user should be able to call
+    # ``summary(em)`` without manually translating those labels back to
+    # ``"link"`` / ``"response"`` (auditor V11 P1: validator rejected
+    # the adapter's default ``type="prob"``). Permit any string that
+    # the object already carries (pass-through is always safe), and
+    # the two canonical scales for explicit user requests.
+    _VALID_SCALES = ("link", "response", "prob", "latent", "cum.prob")
+    if requested_type not in _VALID_SCALES and requested_type != obj_type:
         raise ValueError(
-            f"type must be 'link' or 'response', got {requested_type!r}."
+            f"type must be one of {_VALID_SCALES} or the object's own "
+            f"scale ({obj_type!r}), got {requested_type!r}."
         )
 
     # posterior results carry

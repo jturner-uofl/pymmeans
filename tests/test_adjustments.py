@@ -165,3 +165,100 @@ def test_unknown_method_raises():
 def test_empty_input_returns_empty():
     out = adjust_pvalues([], "bonferroni")
     assert len(out) == 0
+
+
+def test_dunnett_monotonicity_at_extreme_tail():
+    """Regression for the v0.2.3 P0: the Dunnett quadrature must never
+    return an adjusted p-value smaller than its per-comparison unadjusted
+    counterpart, and never larger than the Bonferroni bound. The earlier
+    formulation computed ``P(stay-in-box) = ndtr(a) - ndtr(b)`` then
+    subtracted from 1, which lost all precision when both args were
+    extreme (``ndtr(x) -> 1.0`` exactly for ``x > ~8``) and returned
+    adjusted p-values below the marginal lower bound — including
+    negative numbers in the deepest tails. The v0.2.3 fix routes
+    through a tail-stable ``ndtr(-a) + ndtr(b)`` complement formulation
+    plus a defensive Bonferroni clip; this test pins the resulting
+    monotonicity guarantee across a grid that spans moderate to extreme
+    tail regimes.
+    """
+    import numpy as np
+    from scipy.stats import t as tdist
+
+    from pymmeans.adjustments import _dunnett
+
+    # Balanced two-group Dunnett (k=2 contrasts, rho=0.5 — the
+    # canonical trt.vs.ctrl correlation for equal sample sizes).
+    corr = np.array([[1.0, 0.5], [0.5, 1.0]])
+    cases = [
+        (2.0,  27),
+        (5.0,  27),
+        (11.354, 27),  # auditor's exact failing case
+        (13.28, 27),   # deeper than the auditor probed
+        (15.0, 100),
+        (20.0, 200),   # below scipy QMC noise floor
+    ]
+    for t_val, df_v in cases:
+        unadj = 2 * tdist.sf(t_val, df_v)
+        p_adj = _dunnett(np.array([t_val, t_val]), corr, df_v)[0]
+        assert p_adj >= unadj, (
+            f"Dunnett monotonicity violated at t={t_val}, df={df_v}: "
+            f"adj={p_adj:.3e} < unadj={unadj:.3e}"
+        )
+        # Bonferroni upper bound: adj <= k * unadj for any correlation.
+        # Tiny epsilon for float noise when both sides are denormal.
+        assert p_adj <= 2 * unadj + 1e-300, (
+            f"Dunnett Bonferroni-bound violated at t={t_val}, df={df_v}: "
+            f"adj={p_adj:.3e} > 2*unadj={2*unadj:.3e}"
+        )
+
+
+def test_dunnett_rank1_detector_handles_k2():
+    """v0.2.3: the rank-1 Dunnett detector was hard-coded to require
+    ``k >= 3``, sending k=2 cases through the scipy QMC fallback which
+    has a ~1e-5 absolute-precision floor — incompatible with the
+    rare-event regime (p ~ 1e-12) the auditor flagged. The fix permits
+    any 2-D MVT correlation (trivially representable as rank-1) to use
+    the tail-stable quadrature.
+    """
+    import numpy as np
+
+    from pymmeans.adjustments import _is_dunnett_rank1
+
+    corr = np.array([[1.0, 0.5], [0.5, 1.0]])
+    matched, h = _is_dunnett_rank1(corr)
+    assert matched
+    assert h is not None
+    assert abs(h[0] * h[1] - 0.5) < 1e-12
+
+
+def test_multinom_summary_accepts_prob_and_latent():
+    """v0.2.3 P1: ``summary()`` rejected the multinomial adapter's own
+    ``type="prob"`` / ``type="latent"`` outputs, forcing users to
+    manually relabel before calling the standard summary entry point.
+    """
+    import numpy as np
+    import numpy.random as nr
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    from pymmeans.multinom import multinom_emmeans
+    from pymmeans.summary_layer import summary
+
+    np.random.seed(0)
+    n = 60
+    g = np.random.choice(["a", "b", "c"], n)
+    x = np.random.randn(n)
+    logits = np.column_stack([
+        np.zeros(n),
+        1.0 * (g == "b") + 0.3 * x,
+        1.5 * (g == "c") + 0.2 * x,
+    ])
+    probs = np.exp(logits) / np.exp(logits).sum(axis=1, keepdims=True)
+    y = np.array([nr.choice(3, p=p) for p in probs])
+    df = pd.DataFrame({"y": y, "g": g, "x": x})
+    fit = smf.mnlogit("y ~ g + x", data=df).fit(disp=False)
+    for mode in ("prob", "latent"):
+        em = multinom_emmeans(fit, "g", mode=mode)
+        s = summary(em)
+        assert s is not None
+        assert len(s) > 0

@@ -760,12 +760,24 @@ df_rel = float(np.max(np.abs(pv["df"].values - rv["df"].values) / rv["df"].value
 check("VI", "vc_formula KR df (relative)", df_rel, 0.06, "KR-df approx")
 
 # WHERE does the ~4% df gap come from? Compare the REML variance-component
-# estimates: statsmodels vs lme4. They agree to ~0.01%, so the gap is NOT a
-# fit-level difference — it is in the finite-difference Kenward-Roger
-# DENOMINATOR-DF computation for the augmented variance-parameter vector (a
-# method-level approximation), and it is inference-irrelevant (it shifts the
-# t-quantile by <1% at these df). The KR SE — the inference-critical
-# quantity — matches R's published output to three decimals.
+# estimates that produce the CSV reference: statsmodels vs lme4 fit on this
+# exact data / formulation agree to ~0.01%, so the gap THIS NOTEBOOK SHOWS is
+# not a fit-level difference — it is in the finite-difference Kenward-Roger
+# denominator-df computation for the augmented variance-parameter vector (a
+# method-level approximation) and shifts the t-quantile by <1% at these df.
+#
+# AUDITOR-V11 SCOPE NOTE (v0.2.3). The ~4% figure is the gap on the EMM-level
+# df WITH THIS DATA AND FORMULATION. Downstream pairwise-contrast df can show
+# a LARGER apparent discrepancy (~20%) against an independent R fit when the
+# user's lme4 specification produces different REML variance components from
+# statsmodels — a real possibility because statsmodels and lme4 differ in
+# their treatment of crossed-vs-nested random effects, variance-component
+# parameterization, and singular-fit boundary handling. The KR derivative
+# path itself is consistent with pbkrtest; the upstream REML estimates can
+# disagree depending on the model spec, and the df is a non-linear function
+# of those estimates. Users who need exact-pbkrtest agreement for inference
+# should fit in lme4 and read back via rpy2; the pymmeans KR path is a
+# correct implementation against statsmodels REML output, not a re-fit.
 sm_vc = {"Block": float(np.asarray(m_vc.cov_re).ravel()[0]),
          "BlockVariety": float(np.asarray(m_vc.vcomp)[0]),
          "Residual": float(m_vc.scale)}
@@ -776,8 +788,12 @@ vc_tbl["rel_diff_%"] = (vc_tbl["statsmodels"] - vc_tbl["lme4"]).abs() / vc_tbl["
 print("\nREML variance components — statsmodels vs lme4 (the FIT):")
 print(vc_tbl.to_string())
 check("VI", "vc variance components vs lme4", float(vc_tbl["rel_diff_%"].max() / 100), 1e-3, "REML fit")
-print("\n=> fits agree to ~0.01%; the ~4% df gap is the KR-df approximation,")
-print("   not the fit (and is inference-irrelevant). SE matches R to 3 decimals.")
+print("\n=> fits agree to ~0.01% within this controlled comparison; the ~4% df")
+print("   gap is the KR-df finite-difference approximation, not the fit, and")
+print("   shifts the t-quantile by <1% at these df. SE matches R to 3 decimals.")
+print("   Real-world warning: pairwise-contrast df can show larger gaps (~20%)")
+print("   when an independent R fit produces different REML variance components")
+print("   from statsmodels — see the scope note above the contract.")
 print("\nvc_formula Kenward-Roger EMMs (oats) match R's published KR output:")
 print(pv[["nitro", "emmean", "SE", "df"]].to_string(index=False))
 

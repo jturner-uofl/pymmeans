@@ -504,20 +504,41 @@ def _is_dunnett_rank1(
     Signs are preserved: ``h_j`` inherits the sign of ``R[a, j]``,
     which preserves ``rho_ij = h_i * h_j`` in both magnitude and sign.
 
-    ``k < 3`` returns ``False`` — at ``k=1`` Dunnett degenerates to a
-    two-sided t-test and at ``k=2`` scipy's QMC is already fast enough
-    that the dispatch isn't worth it.
+    ``k = 1`` returns ``False`` — Dunnett degenerates to a two-sided
+    t-test handled by the caller. ``k = 2`` returns ``True`` whenever
+    the off-diagonal is in ``(-1, 1)``: any such bivariate MVT is
+    representable as rank-1 (``rho = h_1 h_2``), and routing it
+    through the tail-stable 2-D quadrature avoids the QMC path's
+    catastrophic ``1 - inside`` cancellation at large ``|t|`` (auditor
+    V11 P0 — scipy's ``multivariate_t.cdf`` returns the box-stay
+    probability with ~1e-5 absolute tolerance, swamping any signal
+    when the true tail mass is below that floor).
     """
     corr = np.asarray(corr, dtype=float)
     if corr.ndim != 2 or corr.shape[0] != corr.shape[1]:
         return False, None
     k = corr.shape[0]
-    if k < 3:
+    if k < 2:
         return False, None
 
-    # Diag must be (close to) 1.
     if not np.allclose(np.diag(corr), 1.0, atol=tol):
         return False, None
+
+    if k == 2:
+        # Any 2x2 correlation with |rho| < 1 admits the trivial
+        # decomposition h_1 = h_2 = sqrt(rho) (for rho >= 0) or
+        # (h_1, h_2) = (sqrt(|rho|), -sqrt(|rho|)) (for rho < 0). The
+        # 2-D MVT joint probability only depends on rho, so either
+        # decomposition is exact.
+        rho = float(corr[0, 1])
+        if not np.isfinite(rho) or abs(rho) >= 1.0 - 1e-12:
+            return False, None
+        root = np.sqrt(abs(rho))
+        if rho >= 0:
+            h = np.array([root, root])
+        else:
+            h = np.array([root, -root])
+        return True, h
 
     # Pick anchor: index with max sum of |off-diagonal| entries.
     abs_off = np.abs(corr) - np.diag(np.abs(np.diag(corr)))
@@ -668,22 +689,81 @@ def _dunnett_rank1_pvalue(
     inv_sigma = (1.0 / sqrt_one_minus_h2)[None, :]  # (1, k)
     hjz = h_row * z_nodes[:, None]  # (N_inner, k); reused for every q,s
 
+    # Bonferroni bracket for defensive clipping. The marginals of T_j
+    # under MVT(R, df) are all student-t(df), independent of h_j, so for
+    # ANY correlation structure:
+    #   unadj_q  := 2 * t.sf(q, df) = P(|T_1| > q)
+    #   bonf_q   := k * unadj_q     = sum_j P(|T_j| > q)
+    # The Bonferroni inequalities are tight:
+    #   unadj_q <= P(max_j |T_j| > q) <= bonf_q
+    # The lower bound is the marginal exceedance probability of any
+    # single component; the upper bound is the union-bound. Both hold
+    # without any rank-1 assumption. Clipping the quadrature output to
+    # this bracket cannot lose accuracy in the regime where the
+    # quadrature is good (the true value is interior to the bracket
+    # and the quadrature already lands there) and provably restores
+    # correctness in extreme tails where ``ndtr(-a)`` underflows to 0
+    # and the integral can otherwise drop below ``unadj_q`` — fixing
+    # the auditor-V11 P0 monotonicity violation by construction.
+    from scipy.stats import t as _tdist_for_clip
+
+    use_normal_for_clip = not np.isfinite(df)
+    if use_normal_for_clip:
+        from scipy.special import ndtr as _ndtr_for_clip
+        def _unadj(qv: float) -> float:
+            return 2.0 * float(_ndtr_for_clip(-abs(qv)))
+    else:
+        def _unadj(qv: float) -> float:
+            return 2.0 * float(_tdist_for_clip.sf(abs(qv), df))
+
     for q in unique_q_set:
         if q == 0.0:
-            cdf_by_q[q] = 0.0
+            # P(|T| > 0) = 1 for a continuous statistic.
+            cdf_by_q[q] = 1.0
             continue
-        prob = 0.0
+        p_out = 0.0
         for s, w_s in zip(s_nodes, s_weights, strict=True):
             qs = q * s
-            a = (qs - hjz) * inv_sigma  # (N_inner, k)
-            b = (-qs - hjz) * inv_sigma
-            inner = ndtr(a) - ndtr(b)  # (N_inner, k)
-            np.clip(inner, 0.0, None, out=inner)
-            prod = np.prod(inner, axis=1)  # (N_inner,)
-            prob += w_s * float(z_weights @ prod)
-        cdf_by_q[q] = prob
+            a = (qs - hjz) * inv_sigma   # (N_inner, k)
+            b = (-qs - hjz) * inv_sigma  # (N_inner, k)
+            # Per-component complement P(|T_j| > q | z_0, v) computed
+            # in tail-stable form: ``ndtr(-a)`` for the upper tail and
+            # ``ndtr(b)`` for the lower tail. The naive formulation
+            # ``ndtr(a) - ndtr(b)`` saturates to ``1 - 0 = 1`` at large
+            # ``|a|, |b|`` (auditor V11 P0: ``ndtr(x) -> 1.0`` exactly
+            # for ``x > ~8``), losing the rare-event mass; the final
+            # ``1 - P(stay)`` step then cancels what little signal
+            # remained. Computing the complement directly keeps the
+            # tail in floating-point range and skips the cancellation.
+            q_j = ndtr(-a) + ndtr(b)        # (N_inner, k)
+            np.clip(q_j, 0.0, 1.0, out=q_j)
+            # 1 - prod_j (1 - q_j) computed stably via
+            # ``-expm1(sum log1p(-q_j))`` so the final subtraction
+            # lives in log-space and never cancels in the tails. When
+            # any ``q_j == 1`` (threshold below noise floor), the
+            # log1p term is ``-inf`` and ``-expm1(-inf) = 1``,
+            # correctly recovering ``p = 1``.
+            with np.errstate(divide="ignore"):
+                sum_log = np.sum(np.log1p(-q_j), axis=1)  # (N_inner,)
+            p_inner = -np.expm1(sum_log)                  # (N_inner,)
+            p_out += w_s * float(z_weights @ p_inner)
+        # ``cdf_by_q`` now stores the FWER-adjusted p-value
+        # ``P(max_j |T_j| > q)`` directly rather than the box-stay
+        # probability that we then had to subtract from 1. Clip into
+        # the Bonferroni-marginal bracket so that even when the
+        # quadrature underflows in the extreme tail the returned
+        # p-value still satisfies the provable inequalities. Use the
+        # MVT *dimension* (``len(h)``), NOT ``len(t_ratios)`` — the
+        # query may ask for a single threshold but the MVT family
+        # size that drives the Bonferroni bound is fixed by the
+        # correlation structure.
+        u = _unadj(q)
+        k_dim = len(h)
+        lower = u
+        upper = min(1.0, k_dim * u)
+        cdf_by_q[q] = float(np.clip(p_out, lower, upper))
 
-    out = np.array([1.0 - cdf_by_q[abs(float(t))] for t in t_ratios])
+    out = np.array([cdf_by_q[abs(float(t))] for t in t_ratios])
     return np.clip(out, 0.0, 1.0)
 
 
@@ -806,6 +886,24 @@ def _dunnett(t_ratios: np.ndarray, correlation: np.ndarray, df: float) -> np.nda
 
     # Cache by unique q so identical |t| → identical p_value.
     unique_q: dict[float, float] = {}
+    # Bonferroni bracket for defensive clipping (auditor V11 P0). The
+    # QMC integrator returns ``inside = P(stay-in-box)`` with ~1e-5
+    # absolute tolerance; computing ``1 - inside`` cancels the only
+    # useful digits when the true tail mass is below ~1e-7, and the
+    # returned value can drop below the per-component unadj or even go
+    # negative. Marginal lower bound (any rho): ``P(max|T|>q) >=
+    # P(|T_1|>q) = unadj``. Union upper bound: ``P(max|T|>q) <=
+    # k * unadj``. Clipping to ``[unadj, k*unadj]`` is exact in the
+    # regime where QMC is good (the true value is interior and QMC
+    # lands there) and restores monotonicity in the regime where QMC
+    # underflows.
+    if use_normal:
+        def _unadj(qv: float) -> float:
+            return 2.0 * float(stats.norm.sf(abs(qv)))
+    else:
+        def _unadj(qv: float) -> float:
+            return 2.0 * float(stats.t.sf(abs(qv), df))
+
     for t in t_ratios:
         q = abs(float(t))
         if q in unique_q:
@@ -835,7 +933,9 @@ def _dunnett(t_ratios: np.ndarray, correlation: np.ndarray, df: float) -> np.nda
                     maxpts=maxpts,
                 )
             )
-        unique_q[q] = 1.0 - inside
+        raw = 1.0 - inside
+        u = _unadj(q)
+        unique_q[q] = float(np.clip(raw, u, min(1.0, k * u)))
 
     out = np.array([unique_q[abs(float(t))] for t in t_ratios])
     return np.clip(out, 0.0, 1.0)
