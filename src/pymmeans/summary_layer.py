@@ -1715,32 +1715,91 @@ def summary(
                 # familywise error for this single family.
                 pass
             else:
-                valid_cross = np.isfinite(p_adj)
-                n_valid_cross = int(valid_cross.sum())
-                if n_valid_cross > 1:
+                # auditor V13-A1 P0: R ``emmeans::summary(cross.adjust=)``
+                # arranges per-family adjusted p-values into a matrix
+                # with ``nrow = contrasts_per_family`` and
+                # ``ncol = n_families``, then applies the cross-adjust
+                # method ROW-WISE across the family columns
+                # (R source: ``R/summary.R`` lines ~705-720 — the
+                # ``mat = matrix(p, nrow = len)`` + ``apply(mat, 1,
+                # p.adjust)`` block). The Bonferroni multiplier is
+                # therefore ``n_families``, NOT the total pool size.
+                # The earlier pymmeans implementation flattened the
+                # matrix and multiplied by the pool size, silently
+                # diverging from R by a factor of
+                # ``contrasts_per_family``. Per R's documented
+                # condition ("they are all the same size"), we only
+                # apply cross-adjust when every family has the same
+                # row count; otherwise it is a silent no-op (R parity).
+                _fam_meta = _cross_meta["families"]
+                _fam_sizes = [int(f["n_rows"]) for f in _fam_meta]
+                _all_same_size = (
+                    len(set(_fam_sizes)) == 1 and _fam_sizes[0] > 0
+                )
+                if not _all_same_size:
+                    # Mismatched family sizes — R silently no-ops
+                    # cross-adjust in this regime.
+                    pass
+                else:
+                    _contrasts_per_family = _fam_sizes[0]
+                    # Reshape into (contrasts_per_family, n_families) by
+                    # stacking the per-family slices as columns. The
+                    # families are stored in row-order so column k
+                    # corresponds to family k.
                     try:
-                        p_cross = adjust_pvalues(
-                            p_adj[valid_cross],
-                            cross_adjust,
-                            n_means=n_valid_cross,
-                            # cross-family pool has no shared df;
-                            # use the median df as a reasonable
-                            # central estimate for methods that
-                            # need one (none of the supported
-                            # cross-methods actually use df).
-                            df=float(np.nanmedian(df_arr[valid_cross])),
-                            t_ratios=t_ratio[valid_cross],
-                        )
-                        out_cross = np.full(len(p_adj), np.nan)
-                        out_cross[valid_cross] = p_cross
-                        p_adj = out_cross
-                    except (ValueError, TypeError) as exc:
+                        _cols = [
+                            p_adj[int(f["start"]):int(f["stop"])]
+                            for f in _fam_meta
+                        ]
+                        _mat = np.column_stack(_cols)
+                    except Exception as exc:
                         raise ValueError(
-                            f"cross_adjust={cross_adjust!r} failed "
-                            f"to apply: {type(exc).__name__}: {exc}. "
-                            "Try 'bonferroni' as a conservative "
-                            "fallback."
+                            f"cross_adjust={cross_adjust!r}: failed to "
+                            "reshape p-values into the per-family "
+                            f"matrix ({type(exc).__name__}: {exc}). "
+                            "This is an internal error — please report."
                         ) from exc
+
+                    # Apply the cross-adjust method ROW-WISE across the
+                    # n_families columns. R's row-wise ``p.adjust`` with
+                    # ``method="bonferroni"`` multiplies each row's
+                    # p-values by ``ncol(mat) = n_families``.
+                    _adjusted_rows = np.empty_like(_mat)
+                    for _ri in range(_contrasts_per_family):
+                        _row = _mat[_ri, :]
+                        _row_valid = np.isfinite(_row)
+                        _n_row_valid = int(_row_valid.sum())
+                        if _n_row_valid > 1:
+                            try:
+                                _adj_row = adjust_pvalues(
+                                    _row[_row_valid],
+                                    cross_adjust,
+                                    n_means=_n_row_valid,
+                                    df=float(np.inf),
+                                    t_ratios=np.zeros(_n_row_valid),
+                                )
+                                _out_row = np.full(len(_row), np.nan)
+                                _out_row[_row_valid] = _adj_row
+                                _adjusted_rows[_ri, :] = _out_row
+                            except (ValueError, TypeError) as exc:
+                                raise ValueError(
+                                    f"cross_adjust={cross_adjust!r} "
+                                    f"failed to apply: "
+                                    f"{type(exc).__name__}: {exc}. "
+                                    "Try 'bonferroni' as a conservative "
+                                    "fallback."
+                                ) from exc
+                        else:
+                            _adjusted_rows[_ri, :] = _row
+
+                    # Unstack the adjusted matrix back into ``p_adj``
+                    # by writing each column to its family's slice.
+                    _out_cross = p_adj.copy()
+                    for _ci, _f in enumerate(_fam_meta):
+                        _out_cross[
+                            int(_f["start"]):int(_f["stop"])
+                        ] = _adjusted_rows[:, _ci]
+                    p_adj = _out_cross
         out["p_value"] = p_adj
     else:
         out = out.drop(columns=["t_ratio", "p_value"], errors="ignore")

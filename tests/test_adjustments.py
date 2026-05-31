@@ -231,6 +231,159 @@ def test_dunnett_rank1_detector_handles_k2():
     assert abs(h[0] * h[1] - 0.5) < 1e-12
 
 
+def test_cross_adjust_bonferroni_matches_r_emmeans_matrix_rule():
+    """Regression for the v0.2.7 P0 (auditor V13-A1): R
+    ``emmeans::summary(cross.adjust='bonferroni')`` applies
+    Bonferroni ROW-WISE across the family columns of a matrix
+    arranged as ``(contrasts_per_family, n_families)`` — multiplier
+    is ``n_families``, NOT the total pool size. The pre-fix
+    implementation flattened the matrix and multiplied by the
+    pool size, silently diverging from R by ``contrasts_per_family``.
+
+    Reference: R source ``R/summary.R`` lines ~705-720 at
+    github.com/rvlenth/emmeans/master:
+
+        mat = matrix(result$p.value[bridx], nrow = len)
+        apv = apply(mat, 1, function(p) p.adjust(p, cross.adjust))
+
+    This test pins the corrected behaviour: each row of the
+    per-family p-value matrix has Bonferroni applied across the
+    ``n_families`` columns, so each p-value is multiplied by
+    ``n_families`` and clipped at 1.
+    """
+    import numpy as np
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    from pymmeans import emmeans, pairs, summary
+
+    rng = np.random.default_rng(20260613)
+    g = pd.Categorical(rng.choice(["a", "b", "c"], 300))
+    block = pd.Categorical(rng.choice(["x", "y"], 300))
+    y = (
+        (np.asarray(g) == "b") * 0.6
+        + (np.asarray(g) == "c") * 1.1
+        + rng.normal(scale=1.0, size=300)
+    )
+    df_ = pd.DataFrame({"g": g, "block": block, "y": y})
+    fit = smf.ols("y ~ g * block", df_).fit()
+    ct = pairs(emmeans(fit, "g", by="block"))
+
+    base = summary(ct, adjust="none")
+    with_cross = summary(ct, adjust="none", cross_adjust="bonferroni")
+
+    n_families = len(set(base["block"]))
+    p_base = base["p_value"].to_numpy()
+    p_cross = with_cross["p_value"].to_numpy()
+    # R rule: multiply each p by n_families, clip at 1.
+    p_expected = np.minimum(1.0, p_base * n_families)
+    np.testing.assert_allclose(p_cross, p_expected, rtol=0.0, atol=0.0)
+
+
+def test_posterior_emmeans_warns_on_degenerate_chain():
+    """Regression for the v0.2.7 Q-B (auditor V13-A1): the
+    ``posterior_emmeans`` summary path silently accepted degenerate
+    posterior input (e.g., a single draw replicated N times, a
+    constant chain, or a sampler stuck at an initial value). The
+    fix emits a ``UserWarning`` when the empirical posterior SE
+    collapses to machine-epsilon scale.
+
+    Healthy MVN draws from a non-degenerate distribution must NOT
+    warn.
+    """
+    import warnings
+
+    import numpy as np
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    from pymmeans import emmeans, posterior_emmeans
+    from pymmeans.posterior import PosteriorInfo
+
+    rng = np.random.default_rng(0)
+    n_per = 30
+    df_ = pd.DataFrame({
+        "g": pd.Categorical(np.repeat(list("ABCD"), n_per)),
+        "y": rng.standard_normal(4 * n_per),
+    })
+    fit = smf.ols("y ~ g", df_).fit()
+    em = emmeans(fit, "g")
+    mu_hat = np.asarray(fit.params)
+    V_hat = np.asarray(fit.cov_params())
+
+    # Healthy case — no warning.
+    draws_ok = np.random.default_rng(0).multivariate_normal(mu_hat, V_hat,
+                                                              size=10_000)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        posterior_emmeans(
+            PosteriorInfo(beta_samples=draws_ok, model_info=em.model_info),
+            "g",
+        )
+        assert len(w) == 0, (
+            f"healthy posterior should not warn (got {len(w)} warnings)"
+        )
+
+    # Degenerate case — single draw replicated.
+    one_draw = np.random.default_rng(0).multivariate_normal(mu_hat, V_hat,
+                                                              size=1)
+    draws_bad = np.tile(one_draw, (1000, 1))
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        posterior_emmeans(
+            PosteriorInfo(beta_samples=draws_bad, model_info=em.model_info),
+            "g",
+        )
+        assert any(
+            issubclass(wi.category, UserWarning)
+            and "degenerate" in str(wi.message)
+            for wi in w
+        ), (
+            f"degenerate posterior should emit a degenerate-chain "
+            f"UserWarning (got {[str(wi.message)[:80] for wi in w]})"
+        )
+
+
+def test_cross_adjust_bonferroni_compound_with_internal_adjust():
+    """Companion to the R-matching test above: R says the *overall*
+    Bonferroni adjustment is obtained by specifying BOTH
+    ``adjust='bonferroni'`` AND ``cross_adjust='bonferroni'``
+    (docstring at R/summary.R lines 263-283). The compound
+    multiplier should be ``contrasts_per_family * n_families``
+    (= N_pool), not ``N_pool**2``.
+    """
+    import numpy as np
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    from pymmeans import emmeans, pairs, summary
+
+    rng = np.random.default_rng(20260613)
+    g = pd.Categorical(rng.choice(["a", "b", "c"], 300))
+    block = pd.Categorical(rng.choice(["x", "y"], 300))
+    y = (
+        (np.asarray(g) == "b") * 0.6
+        + (np.asarray(g) == "c") * 1.1
+        + rng.normal(scale=1.0, size=300)
+    )
+    df_ = pd.DataFrame({"g": g, "block": block, "y": y})
+    fit = smf.ols("y ~ g * block", df_).fit()
+    ct = pairs(emmeans(fit, "g", by="block"))
+
+    base = summary(ct, adjust="none")
+    compound = summary(ct, adjust="bonferroni", cross_adjust="bonferroni")
+
+    n_families = len(set(base["block"]))
+    contrasts_per_family = len(base) // n_families
+    p_base = base["p_value"].to_numpy()
+    # R compound rule: × contrasts_per_family × n_families = × N_pool.
+    p_expected = np.minimum(1.0, p_base * contrasts_per_family * n_families)
+    np.testing.assert_allclose(
+        compound["p_value"].to_numpy(), p_expected,
+        rtol=0.0, atol=0.0,
+    )
+
+
 def test_tukey_at_df3_matches_scipy_closed_form():
     """auditor V12-A4 P2-1: at exactly df=3 the ``_tukey`` boundary
     ``df < 3.0`` routed through the Gauss-Hermite quadrature, which

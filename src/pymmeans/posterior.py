@@ -198,9 +198,45 @@ def posterior_emm_summary(
         mu_samples = family.link.inverse(mu_samples)
 
     alpha = 1.0 - level
+    _emmean_vec = mu_samples.mean(axis=0)
+    _se_vec     = mu_samples.std(axis=0, ddof=1)
+
+    # auditor V13-A1 Q-B: degenerate posterior sanity check. If the
+    # posterior SE for any cell is at machine-epsilon scale relative
+    # to its absolute mean, the input draws are almost certainly
+    # NOT a valid posterior sample — common causes are (a) a single
+    # draw replicated, (b) a constant chain, or (c) a sampler stuck
+    # at an initial value. pymmeans does not enforce R-hat / ESS /
+    # divergence checks at ingest (those are the caller's
+    # responsibility per the arviz seam), but firing a one-line
+    # warning when the empirical SE collapses costs nothing and
+    # surfaces the most common silent bad-input case.
+    _eps_floor = (
+        100.0
+        * float(np.finfo(_se_vec.dtype).eps)
+        * (1.0 + float(np.max(np.abs(_emmean_vec))))
+    )
+    if np.any(_se_vec < _eps_floor):
+        import warnings as _w
+
+        _w.warn(
+            f"posterior_emmeans: the empirical posterior SE for "
+            f"{int(np.sum(_se_vec < _eps_floor))} of "
+            f"{len(_se_vec)} cells is below "
+            f"{_eps_floor:.2e} — at machine-precision scale "
+            "relative to the posterior mean. The input draws are "
+            "likely degenerate (single draw replicated / constant "
+            "chain / sampler stuck). pymmeans does not enforce "
+            "R-hat / ESS / divergence checks at ingest; consult "
+            "``arviz.summary()`` on the underlying InferenceData "
+            "before relying on this output.",
+            UserWarning,
+            stacklevel=3,
+        )
+
     return {
-        "emmean": mu_samples.mean(axis=0),
-        "SE": mu_samples.std(axis=0, ddof=1),
+        "emmean": _emmean_vec,
+        "SE": _se_vec,
         "lower_cl": np.percentile(mu_samples, 100.0 * alpha / 2.0, axis=0),
         "upper_cl": np.percentile(mu_samples, 100.0 * (1.0 - alpha / 2.0), axis=0),
     }

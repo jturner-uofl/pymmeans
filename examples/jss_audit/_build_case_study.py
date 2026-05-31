@@ -2088,11 +2088,18 @@ _delta_ratio = float(np.max(np.abs(_ratio_emp - _ratio_theory)))
 check("XI.e", "SE ratio = sqrt(n/(n-p)) — MLE-vs-unbiased scale identity",
       _delta_ratio, 1e-6, "optimiser")
 
-# Contract 3 — ratio is uniform across cells (per-cell spread = 0).
+# Contract 3 — ratio is uniform across cells (auditor V13-A1 P2:
+# this is OPTIMISER-bounded, not FP-bounded, because the absolute
+# value of each cell's ratio depends on lifelines' BFGS Hessian.
+# The structural identity is that the per-cell *deviation from the
+# mean ratio* is bounded by the lifelines optimiser tolerance —
+# empirically ~1e-11 across n ∈ {120, 240, 480, 960} in the
+# auditor's sweep. Tolerance 1e-9 leaves headroom for a future
+# lifelines version with a looser BFGS convergence criterion).
 _ratio_spread = float(_ratio_emp.max() - _ratio_emp.min())
 print(f"  SE-ratio spread across cells = {_ratio_spread:.2e}")
 check("XI.e", "AFT/OLS SE ratio uniform across cells",
-      _ratio_spread, 1e-9, "structural")
+      _ratio_spread, 1e-9, "optimiser")
 """)
 
 # --- Variance-clamp warning demo (v0.2.5 observability fix) ------------------
@@ -2113,15 +2120,20 @@ diagnostic markers (auditor V12-A3 F4):
    ``"satterthwaite"``),
 3. a pointer to ``health_check(fit)`` for remediation.
 
-Reliably constructing a boundary REML fit that triggers this in a
-notebook is fragile (depends on optimiser convergence path), so we
-verify the observability fix directly by calling the internal
-``_apply_correction`` helper twice: once with a well-conditioned
-``V_corrected`` (must be silent) and once with a deliberately-
-constructed non-PSD ``V_corrected`` (must warn). The contract is
-the v0.2.5 behaviour — the audit found this clamp was silent
-pre-fix and the regression test prevents it from going silent
-again.
+**Scope note (auditor V13-A1 P1).** This cell exercises the
+warning code path by calling the internal
+``pymmeans.satterthwaite._apply_correction`` helper twice. It is
+a **regression test on the warning emitter**, not a demonstration
+of a user-reachable failure mode. Reaching ``_apply_correction``
+with a non-PSD ``V_corrected`` via the public
+``apply_kenward_roger`` / ``apply_satterthwaite`` entry points is
+very rare in practice: ``apply_satterthwaite`` passes the
+PSD-by-construction ``V_beta``; ``apply_kenward_roger`` short-
+circuits to ``BoundaryFitError`` *before* the variance-clamp can
+fire for cases where the REML variance components hit the
+boundary. The contract here is that the warning code is wired and
+emits the documented diagnostic markers — it pins the regression
+test, it does not claim the warning fires routinely in the wild.
 """)
 code(r"""
 import warnings as _w_clamp
@@ -2211,19 +2223,24 @@ any contrast and any df.
 declared equivalence margin gets more permissive, more contrasts
 qualify as equivalent.
 
-**`cross_adjust` pool-Bonferroni closure.** When ``cross_adjust=
-'bonferroni'`` is applied to a pool of ``N`` contrasts spread over
-multiple families (constructed via ``by=``), the closure principle
-(Marcus, Peritz & Gabriel 1976) collapses to the simple pool-
-Bonferroni identity
+**`cross_adjust` R-matching identity.** R ``emmeans::summary(
+cross.adjust=...)`` arranges the per-family adjusted p-values into
+a matrix with ``nrow = contrasts_per_family`` and
+``ncol = n_families``, then applies the cross-adjust method
+**row-wise across the family columns** (R source: ``R/summary.R``
+lines ~705-720, ``mat = matrix(p, nrow = len)`` followed by
+``apply(mat, 1, p.adjust)``). For Bonferroni this means each row's
+p-values are multiplied by ``n_families``, NOT by the total pool
+size. The verifiable identity (auditor V13-A1 P0) is
 
-$$\tilde{p}_i = \min\!\big(1, \, p_i \cdot N\big)$$
+$$\tilde{p}_i = \min\!\big(1, \, p_i \cdot n_{\text{families}}\big)$$
 
-where ``N`` is the total number of contrasts across all families
-in the pool (not the family count). This is the conservative
-pool-Bonferroni — auditor V12-A4 noted this matches R
-``emmeans::summary(cross.adjust=...)``'s composition. The identity
-is verifiable to **0.0 absolute** without an R reference.
+The earlier pymmeans implementation flattened the matrix and
+multiplied by ``N_pool = contrasts_per_family × n_families``,
+giving a value that was conservative by ``contrasts_per_family``
+× too much. v0.2.7 fixes this to match R bit-exactly. R's
+documented condition is that all families have the same size; with
+mismatched sizes cross-adjust is a silent no-op (also R parity).
 """)
 code(r"""
 import numpy as np
@@ -2302,18 +2319,20 @@ _n_pool = len(_base_cross)
 print(f"  {_n_families} families × {_n_pool // _n_families} contrasts/family "
       f"= {_n_pool} contrasts in pool")
 
-# Closure-principle identity: cross_p = min(1, base_p * N_pool).
+# R-matching identity: cross_adjust='bonferroni' multiplies by
+# n_families (not the total pool size). This matches R
+# emmeans::summary(cross.adjust='bonferroni') verbatim.
 _p_base    = _base_cross["p_value"].to_numpy()
 _p_cross   = _with_cross["p_value"].to_numpy()
-_p_expected = np.minimum(1.0, _p_base * _n_pool)
+_p_expected = np.minimum(1.0, _p_base * _n_families)
 _cross_max_err = float(np.max(np.abs(_p_cross - _p_expected)))
-print(f"  base p-values:        {_p_base}")
-print(f"  cross-adjusted:       {_p_cross}")
-print(f"  expected min(1, p*{_n_pool}): {_p_expected}")
-print(f"  max|p_cross - min(1, p_base * N_pool)| = {_cross_max_err:.2e}")
+print(f"  base p-values:                       {_p_base}")
+print(f"  pymmeans cross_adjust='bonferroni':  {_p_cross}")
+print(f"  R rule (min(1, p_base * n_families={_n_families})): {_p_expected}")
+print(f"  max|pymmeans - R rule| = {_cross_max_err:.2e}")
 check(
     "V.b",
-    "cross_adjust='bonferroni' = min(1, p_base * N_pool) identity",
+    "cross_adjust='bonferroni' = min(1, p_base * n_families) — R parity",
     _cross_max_err, 1e-12, "structural",
 )
 """)
@@ -2685,6 +2704,14 @@ Carlo standard error and apply a 3 ``sqrt(2)`` MCSE acceptance band
 seed roll). If the package's per-draw ``L β`` machinery were
 permutation-sensitive or non-deterministic with seed, this identity
 would fail.
+
+**Scope** (auditor V13-A1 Q-A): the ``MCSE = freq_SE / sqrt(N)``
+identity holds for the Gaussian (MVN) sampling posterior used
+here. For a non-Gaussian posterior (heavy-tailed, skewed) the
+per-cell MCSE should instead be ``posterior_sd / sqrt(N)`` using
+the empirical per-cell posterior standard deviation. The
+implementation is shape-agnostic; only this contract's ``MCSE``
+formula assumes Gaussianity.
 """)
 code(r"""
 import numpy as np
