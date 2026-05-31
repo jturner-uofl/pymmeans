@@ -870,7 +870,7 @@ def from_statsmodels(result: Any) -> ModelInfo:
     if params is not None and getattr(params, "ndim", 1) > 1:
         raise NotImplementedError(
             f"Model class {_cls_name} returns a 2-D parameter matrix "
-            f"(shape {params.shape}); pymmeans v0.1 only supports "
+            f"(shape {params.shape}); pymmeans currently only supports "
             "models with a 1-D structural beta vector. Likely a "
             "multinomial / multivariate fit — see MNLogit workaround "
             "above."

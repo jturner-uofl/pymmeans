@@ -431,11 +431,15 @@ def _tukey(t_ratios: np.ndarray, n_means: int, df: float) -> np.ndarray:
         )
     q = np.abs(t_ratios) * np.sqrt(2.0)
 
-    if df < 3.0:
+    if df <= 3.0:
         # Pathological low-df region: Hermite quadrature loses accuracy
         # because the chi-squared(df)/df distribution has very heavy
         # tails. Fall back to scipy's per-element exact integration —
-        # slow, but rare in practice (df<3 means n<=p+2).
+        # slow, but rare in practice (df<=3 means n<=p+3). The boundary
+        # was previously ``df < 3.0`` (auditor V12-A4 P2-1); at exactly
+        # df=3 the quadrature drifted by ~1e-4 on the known closed-form
+        # ``k=2`` identity ``2 * t.sf(|t|, df)``, so df=3 is now routed
+        # to the scipy path along with df<3.
         from scipy.stats import studentized_range
         return np.clip(studentized_range.sf(q, n_means, df), 0.0, 1.0)
     if df >= _TUKEY_INF_DF_THRESHOLD:
@@ -625,9 +629,26 @@ def _dunnett_rank1_pvalue(
     Cost. ``O(N_outer * N_inner * k)`` per unique ``|t|``. At ``k = 200``
     with the defaults ``(32, 48)`` that's roughly ``3e5`` floating-point
     operations per unique threshold versus the
-    ``maxpts = 50_000 * k = 1e7`` scipy QMC would do, with much better
-    accuracy — empirically below ``1e-6`` absolute error across
-    ``k = 5..200``.
+    ``maxpts = 50_000 * k = 1e7`` scipy QMC would do.
+
+    Accuracy. Measured against an mpmath 40-decimal reference of the
+    same 2-D integral (auditor V12-A3 F1):
+
+    * ``k <= 50``  — absolute error ``< 1e-6`` across the t-range
+    * ``k = 100``  — absolute error up to ``~8e-5`` at moderate
+      ``t in [1.5, 2.0]``; ``< 1e-6`` at ``|t| >= 4``
+    * ``k = 200``  — absolute error up to ``~2e-4`` at ``t ~ 1.7``;
+      ``< 1e-5`` at ``|t| >= 3``
+
+    The Gauss-Hermite × Gauss-Laguerre node counts ``(48, 32)`` are
+    sized for the typical Dunnett family (k <= ~50) where the
+    advertised ``< 1e-6`` holds. At larger ``k`` the integrand
+    becomes more peaked in ``z_0`` and the standard Hermite range
+    under-samples the tail, so the absolute error grows. Decisions
+    on the p-value scale are still bounded by the Bonferroni clip
+    ``[unadj, k * unadj]`` applied to the returned value, so the
+    quadrature insufficiency at large ``k`` does not invert test
+    decisions; it only loses the last few significant digits.
 
     Stability notes.
 

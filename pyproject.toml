@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymmeans"
-version = "0.2.4"
+version = "0.2.5"
 description = "Estimated marginal means for Python — a native port of R's emmeans."
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }

@@ -15,7 +15,7 @@ from ``result.cov_params``. The KR inflation is
     V_b^KR = V_b + sum_ij W_ij V_b (Q_ij - (P_i V_b P_j + P_j V_b P_i)/2) V_b
 where P_i = dA/dtheta_i, Q_ij = d^2 A/(dtheta_i dtheta_j), A = V_b^{-1}.
 
-v0.1 scope:
+Scope:
 - Works for any ``statsmodels.MixedLM`` (random intercept, random slopes,
   multi-level random effects).
 - ``scale = sigma_e^2`` is profiled (treated as known); statsmodels
@@ -1025,7 +1025,33 @@ def _apply_correction(
 
     frame = emm_or_contrast.frame.copy()
     L = emm_or_contrast.linfct
-    new_se = np.sqrt(np.clip(np.einsum("ij,jk,ik->i", L, V_corrected, L), 0.0, None))
+    raw_var = np.einsum("ij,jk,ik->i", L, V_corrected, L)
+    # auditor V12-A3 F4: KR / Satterthwaite-corrected ``V_corrected``
+    # is not guaranteed PSD at boundary REML fits, and the historical
+    # behaviour was to clamp the variance to zero silently. Surface
+    # the clamp as a ``RuntimeWarning`` when the negative magnitude
+    # exceeds plausible floating-point noise so the user can decide
+    # whether to trust the SE rather than reading a quiet zero.
+    _noise_floor = 1e-12 * (1.0 + float(np.max(np.abs(raw_var))))
+    _negative_hits = raw_var < -_noise_floor
+    if bool(np.any(_negative_hits)):
+        import warnings as _w
+
+        _w.warn(
+            f"{method} variance correction produced "
+            f"{int(_negative_hits.sum())} of {len(raw_var)} negative "
+            f"L V Lᵀ diagonal entries (min={float(raw_var.min()):.2e}); "
+            "the corresponding SE has been clamped to 0 to avoid NaN. "
+            "Common cause: boundary REML fit (a variance component "
+            "estimated at zero) under KR/Satterthwaite — the small-"
+            "sample correction is not guaranteed PSD in that regime. "
+            "Verify the underlying fit is well-conditioned (e.g. "
+            "via ``health_check(fit)``) before relying on the affected "
+            "rows.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    new_se = np.sqrt(np.clip(raw_var, 0.0, None))
     frame["SE"] = new_se
     frame["df"] = df
 

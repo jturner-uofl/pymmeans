@@ -786,8 +786,9 @@ def ref_grid(
     ------
     NotImplementedError
         If the formula uses non-identifier factor expressions (e.g.
-        ``factor(percent)``, ``np.log(x)``). v0.1 supports plain column
-        references only; pre-convert with ``pd.Categorical`` and refit.
+        ``factor(percent)``, ``np.log(x)``). Currently only plain column
+        references are supported; pre-convert with ``pd.Categorical``
+        and refit.
     ValueError
         If ``at`` references unknown variables or unknown factor levels,
         if ``cov_reduce`` references an unknown / non-numeric column,

@@ -231,6 +231,40 @@ def test_dunnett_rank1_detector_handles_k2():
     assert abs(h[0] * h[1] - 0.5) < 1e-12
 
 
+def test_tukey_at_df3_matches_scipy_closed_form():
+    """auditor V12-A4 P2-1: at exactly df=3 the ``_tukey`` boundary
+    ``df < 3.0`` routed through the Gauss-Hermite quadrature, which
+    drifted by ~1e-4 on the known closed-form k=2 identity
+    ``2 * t.sf(|t|, df)``. The fix routes df=3 to scipy's
+    ``studentized_range.sf`` along with df<3. This pins the
+    closed-form agreement at the boundary.
+    """
+    import numpy as np
+    from scipy.stats import studentized_range
+    from scipy.stats import t as tdist
+
+    from pymmeans.adjustments import adjust_pvalues
+
+    df = 3.0
+    k = 2
+    for t_val in (2.0, 3.0, 5.0, 7.0):
+        # Raw p_unadj that the family-internal adjustment will see.
+        p_unadj = 2.0 * float(tdist.sf(abs(t_val), df))
+        adj_arr = adjust_pvalues(
+            [p_unadj], "tukey",
+            t_ratios=[t_val], n_means=k, df=df,
+        )
+        adj = float(adj_arr[0])
+        # At k=2 the studentized-range tail equals the two-sided t-tail.
+        q = abs(t_val) * np.sqrt(2.0)
+        srange = float(studentized_range.sf(q, k, df))
+        assert abs(adj - srange) < 1e-12, (
+            f"_tukey at df=3, t={t_val}: pymmeans={adj:.6e} "
+            f"vs scipy.studentized_range.sf={srange:.6e} "
+            f"(diff={adj - srange:.2e}); expected closed-form agreement."
+        )
+
+
 def test_multinom_summary_accepts_prob_and_latent():
     """v0.2.3 P1: ``summary()`` rejected the multinomial adapter's own
     ``type="prob"`` / ``type="latent"`` outputs, forcing users to

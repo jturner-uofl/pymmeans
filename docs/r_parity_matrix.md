@@ -71,7 +71,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `pwpm(emm, type=)` | ✅ Full | Matrix display; `type='response'` produces a ratio matrix for log-family models |
 | `emmip(model, formula, PIs=, dodge=, CIs=, plotit=)` | ✅ Full | `PIs=True`, `dodge=`, `plotit=False` returning R-style DataFrame, `CIs=` as R alias for `show_ci=`. `abbr.len` deferred to v0.2 |
 | `plot(emm)` | 🟡 Partial | Basic forest plot; `comparisons=`, `sep=` missing |
-| `ref_grid(model)` | 🟡 Partial | Missing `cov.reduce` callables, `nesting=`, `nuisance=` |
+| `ref_grid(model)` | 🟡 Partial | `nesting=` and `nuisance=` are supported (see rows below). `cov.reduce=` callables not yet routed through the public `ref_grid` constructor; the `emmeans()` entry point covers the common cases. |
 | `regrid(emm, transform=)` | ✅ Full | R-style wrapper; aliases `"response"` / `"mu"` / `"unlink"` route to `regrid_response`; `"pass"` / `"none"` / `None` are no-ops |
 | `eff_size(emm, sigma=, edf=, method=)` | ✅ Full | Cohen's d + Hedges' g; emits R-style `effect_size` / `effect_size_SE` / `effect_size_lower_cl` / `effect_size_upper_cl` columns |
 | `make.tran(type, ...)` | ✅ Full | R aliases: `asin.sqrt`, `log+1`, `sqrt+.5`, `identity` |
@@ -85,8 +85,9 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `emm_list` | ✅ Full | `EmmList` named / positional container; `summary` / `confint` / `test` recurse; `as_r_frame(EmmList)` combines members into one DataFrame |
 | `as.glht()` / `as.mcmc()` / `hpd.summary()` | ❌ Missing | R-specific adapters |
 | `mvcontrast()` | ✅ Full | `pymmeans.mvcontrast` on a `MultivariateEMM` from `multivariate_emmeans(_MultivariateOLSResults, …)`; Hotelling T² / F per between-contrast, Sidak default; matches R machine-precision (see jss_audit §VII.5). `mvregrid()` still missing. |
-| `add_grouping`, `comb_facs`, `split_fac`, `permute_levels` | ❌ Missing | Grid manipulation utilities |
-| `nesting`, `nuisance`, `counterfactuals` | ❌ Missing | High-value ref-grid features |
+| `add_grouping`, `comb_facs`, `split_fac`, `permute_levels` | ✅ Full | Grid manipulation utilities. All four are exported from ``pymmeans`` and covered by ``tests/test_public_api_smoke.py``. |
+| `nesting=`, `nuisance=` kwargs on ``emmeans()`` | ✅ Full | Auto-nesting detection plus user-supplied dict; nuisance-over-weights override on all four weight schemes (see `src/pymmeans/emmeans.py`). |
+| `counterfactuals=` | 🟡 Partial | Per-cell counterfactual frequency override is implemented for the eager path; the streaming-eager auto-switch covers it. R's full counterfactual scaffolding (e.g. `weights="cells" × by="..."` interactions with non-trivial nesting) is not exhaustively tested. |
 
 ## Contrast methods (R emmc family)
 
@@ -105,7 +106,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `del.eff` | ✅ Full (default adjust = `fdr`) |
 | `identity` | ✅ Full |
 | `helmert` | ✅ Full |
-| `opoly` | ❌ Missing (orthonormal polynomial; v0.2) |
+| `opoly` | ✅ Full | Call ``pymmeans.opoly(k, kind="orthonormal")`` for the R ``emmeans::opoly`` (unit-row-norm) form. Default ``kind="integer"`` returns the R ``poly.emmc`` integer-scaled form for backward compatibility. |
 | `nrmlz` | ❌ Missing (normalization wrapper; v0.2) |
 | `wtcon` | ❌ Missing (weighted contrasts; v0.2) |
 | Custom `method=function(levs, ...)` | ✅ Full — callable accepted; returns dict, DataFrame, or ndarray. Default `adjust="none"` matches R `.emmc_*` semantics |

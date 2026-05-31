@@ -2220,7 +2220,7 @@ def regrid(
     # not-yet-implemented to avoid silently returning an EMM with the
     # wrong .type tag.
     raise NotImplementedError(
-        f"regrid(transform={transform!r}) is not implemented in v0.1. "
+        f"regrid(transform={transform!r}) is not currently implemented. "
         f"Supported aliases:\n"
         f"  - 'response' / 'mu' / 'unlink' — back-transform to "
         f"response scale (calls regrid_response).\n"

@@ -1840,7 +1840,7 @@ def emmeans(
             raise ValueError(
                 f"nesting= is not yet supported with "
                 f"weights={weights!r}. Under non-equal weight modes "
-                "the v0.1 filter-only implementation can't produce "
+                "the current filter-only implementation can't produce "
                 "R-correct per-cell frequencies on the nested "
                 "factors. Two workarounds:\n"
                 "  - Drop nesting= and accept the non-equal "

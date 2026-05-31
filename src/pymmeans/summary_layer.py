@@ -479,7 +479,7 @@ def _contrast_ci_critical_value(
         elif name in ("dunnett", "dunnettx", "mvt"):
             import warnings as _w
             _w.warn(
-                f"confint(ct, adjust={name!r}): pymmeans v0.1 uses a "
+                f"confint(ct, adjust={name!r}): pymmeans currently uses a "
                 "bonferroni-equivalent critical value for the contrast "
                 "CI display; the p-values still use the requested "
                 "adjustment. Use bootstrap_ci for the exact MVT "
@@ -600,7 +600,7 @@ def _emm_ci_critical_value(
         # not under-corrected; emit a warning so the user knows.
         import warnings as _w
         _w.warn(
-            f"summary(emm, adjust={adj_lower!r}): pymmeans v0.1 uses "
+            f"summary(emm, adjust={adj_lower!r}): pymmeans currently uses "
             "a bonferroni-equivalent critical value for the EMM CI "
             "display; the p-values still use the requested "
             "adjustment. Use bootstrap_ci for the exact dunnett / "

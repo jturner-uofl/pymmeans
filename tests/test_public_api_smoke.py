@@ -284,3 +284,146 @@ def test_ml_emmeans_and_contrast_and_pairs_smoke():
 
     pr = ml_pairs(em)
     assert len(pr) >= 1
+
+
+# ---------------------------------------------------------------------
+# Summary / display surface — auditor V12-A3 F2 additions
+# ---------------------------------------------------------------------
+
+
+def test_cld_smoke(_ols_fit):
+    from pymmeans import cld, emmeans
+
+    fit, _ = _ols_fit
+    em = emmeans(fit, "g")
+    out = cld(em)
+    # Letter-assignment frame must carry the target factor and a
+    # ``.group`` column of letter strings.
+    assert "g" in out.columns
+    assert ".group" in out.columns
+    assert set(out["g"]) == {"A", "B", "C"}
+    assert all(isinstance(g, str) and len(g) > 0 for g in out[".group"])
+
+
+def test_pwpm_smoke(_ols_fit):
+    from pymmeans import emmeans, pwpm
+
+    fit, _ = _ols_fit
+    em = emmeans(fit, "g")
+    out = pwpm(em, adjust="none")
+    # Asymmetric matrix: upper triangle = p-values, lower = effects,
+    # diagonal = EMMs. Shape must be k x k.
+    assert out.shape == (3, 3)
+
+
+def test_confint_smoke(_ols_fit):
+    from pymmeans import confint, emmeans
+
+    fit, _ = _ols_fit
+    em = emmeans(fit, "g")
+    out = confint(em, level=0.90)
+    # confint returns a frame with the standard EMM + CI columns at
+    # the requested confidence level.
+    assert "emmean" in out.columns
+    assert "lower_cl" in out.columns
+    assert "upper_cl" in out.columns
+    # 90% CI must be strictly narrower than 95%.
+    out_95 = confint(em, level=0.95)
+    width_90 = float((out["upper_cl"] - out["lower_cl"]).mean())
+    width_95 = float((out_95["upper_cl"] - out_95["lower_cl"]).mean())
+    assert width_90 < width_95
+
+
+def test_as_r_frame_smoke(_ols_fit):
+    from pymmeans import as_r_frame, emmeans
+
+    fit, _ = _ols_fit
+    em = emmeans(fit, "g")
+    rf = as_r_frame(em)
+    # R-style frame keeps the same row count and a recognisable EMM
+    # column (either ``emmean`` or R's ``response`` label).
+    assert len(rf) == 3
+    assert any(c in rf.columns for c in ("emmean", "response", "rate"))
+
+
+def test_rbind_smoke(_ols_fit):
+    from pymmeans import contrast, emmeans, rbind
+
+    fit, _ = _ols_fit
+    em = emmeans(fit, "g")
+    ct1 = contrast(em, method="pairwise")
+    ct2 = contrast(em, method="trt.vs.ctrl")
+    bound = rbind(ct1, ct2)
+    # The stacked contrast must contain all rows of both inputs.
+    assert len(bound.frame) == len(ct1.frame) + len(ct2.frame)
+
+
+# ---------------------------------------------------------------------
+# Options registry surface
+# ---------------------------------------------------------------------
+
+
+def test_emm_options_quartet_smoke():
+    from pymmeans import (
+        emm_options,
+        get_emm_option,
+        reset_emm_options,
+        set_emm_options,
+    )
+
+    sentinel_key = "smoke_quartet_marker"
+    sentinel_val = 42
+
+    try:
+        # ``set_emm_options`` writes to the persistent registry.
+        set_emm_options(**{sentinel_key: sentinel_val})
+        assert get_emm_option(sentinel_key) == sentinel_val
+        # ``emm_options(**kwargs)`` is a context manager that scopes a
+        # temporary override; the previous value must be restored on
+        # exit, and the override must be visible inside the block.
+        with emm_options(**{sentinel_key: sentinel_val + 1}):
+            assert get_emm_option(sentinel_key) == sentinel_val + 1
+        assert get_emm_option(sentinel_key) == sentinel_val
+    finally:
+        reset_emm_options()
+
+
+# ---------------------------------------------------------------------
+# R `lsmeans` backward-compat aliases
+# ---------------------------------------------------------------------
+
+
+def test_lsmeans_aliases_smoke():
+    from pymmeans import (
+        emmeans,
+        emmip,
+        emtrends,
+        lsm,
+        lsmeans,
+        lsmip,
+        lstrends,
+    )
+
+    # The four R-package aliases must be the same callables as the
+    # canonical ``emmeans`` / ``emtrends`` / ``emmip`` entry points.
+    assert lsmeans is emmeans
+    assert lsm is emmeans
+    assert lstrends is emtrends
+    assert lsmip is emmip
+
+
+def test_lsm_options_aliases_smoke():
+    from pymmeans import emm_options, get_emm_option, get_lsm_option, lsm_options
+
+    assert lsm_options is emm_options
+    assert get_lsm_option is get_emm_option
+
+
+# ---------------------------------------------------------------------
+# Posterior import surface (arviz / pymc) — optional dependency
+# ---------------------------------------------------------------------
+
+
+def test_from_arviz_import_smoke():
+    pytest.importorskip("arviz")
+    from pymmeans import from_arviz  # noqa: F401

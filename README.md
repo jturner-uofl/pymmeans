@@ -4,14 +4,14 @@ Estimated marginal means (EMMs) for Python — a native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) package, with no R
 dependency.
 
-> Status: **Beta** (v0.2.4). API stable across the OLS / GLM / MixedLM /
-> GEE / Cox / Beta surface; 84/100 strict parity with R `emmeans` (88/100
+> Status: **Beta** (v0.2.5). API stable across the OLS / GLM / MixedLM /
+> GEE / Cox / Beta surface; 90/100 strict parity with R `emmeans` (94/100
 > if partially-supported items count — see
 > [docs/r_parity_matrix.md](https://github.com/jturner-uofl/pymmeans/blob/main/docs/r_parity_matrix.md))
 > validated against `tests/r_reference/` CSVs at `atol=1e-4` (and tighter —
 > see [vs-r.md](https://github.com/jturner-uofl/pymmeans/blob/main/docs/vs-r.md)).
-> 313 unit tests on the public surface (`pytest`), 54% line coverage. Minor
-> API polish still possible; the numerical surface is frozen.
+> 352 unit tests on the public surface (`pytest`), 54% line coverage.
+> Minor API polish still possible; the numerical surface is frozen.
 
 ## Install
 
@@ -198,7 +198,8 @@ Python without leaving the EMM toolbox.
 
 ## Validation
 
-313 public-surface unit tests pass (1 skipped — `arviz` optional). 18 R-`emmeans` reference
+352 public-surface unit tests pass (a small number of dependency-gated tests
+skip when optional packages are absent). 18 R-`emmeans` reference
 fits are cross-validated to `atol=1e-4` (warpbreaks, pigs, ToothGrowth,
 InsectSprays, neuralgia binomial GLM response-scale, plus the broader
 reference suite). See [tests/test_vs_r.py](https://github.com/jturner-uofl/pymmeans/blob/main/tests/test_vs_r.py),

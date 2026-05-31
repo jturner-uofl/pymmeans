@@ -488,6 +488,8 @@ def opoly(
     k: int,
     max_degree: int | None = None,
     labels: list[str] | None = None,
+    *,
+    kind: str = "integer",
 ) -> tuple[np.ndarray, list[str]]:
     """Build the orthogonal polynomial contrast matrix at equally-spaced points.
 
@@ -495,6 +497,15 @@ def opoly(
     builder. Useful when you want the raw contrast coefficients (for
     inspection, joint tests, or a hand-rolled analysis) without
     routing through :func:`contrast`.
+
+    R-name collision (auditor V12-A3 F6). pymmeans's ``opoly`` is the
+    INTEGER-SCALED polynomial matrix — the same coefficient set R
+    ``emmeans::poly.emmc`` returns. R *also* has a function called
+    ``emmeans::opoly`` which returns the ORTHONORMAL (unit-row-norm)
+    version. To match the R ``emmeans::opoly`` semantics, pass
+    ``kind="orthonormal"``; the default ``kind="integer"`` is kept
+    for backward compatibility with prior pymmeans releases (which
+    have only ever shipped the integer-scaled form under this name).
 
     Parameters
     ----------
@@ -504,23 +515,27 @@ def opoly(
     max_degree
         Highest polynomial degree to emit (``1`` = linear,
         ``2`` = quadratic, ...). Default ``min(6, k - 1)`` matches
-        R ``emmeans::poly.emmc``'s default cap. Capped to ``k - 1``
-        (the maximum identifiable degree on ``k`` points).
+        R ``emmeans::poly.emmc``'s default cap. Capped to ``k - 1``.
     labels
         Optional list of level labels — only used to validate
         length; the polynomial coefficients depend on the equal
-        spacing, not the labels themselves. When omitted the
-        returned matrix is still valid; the labels argument is
-        accepted for API symmetry with the other
-        :data:`CONTRAST_METHODS` builders.
+        spacing, not the labels themselves.
+    kind
+        ``"integer"`` (default) — return the integer-scaled
+        coefficients (R ``emmeans::poly.emmc`` convention). Each row
+        is a small-integer contrast; the row norms differ between
+        degrees. Suitable for inspection / by-hand interpretation.
+
+        ``"orthonormal"`` — rescale each row to unit L2 norm
+        (R ``emmeans::opoly`` convention). The contrast estimates
+        produced under either basis are equivalent up to a known
+        per-row scaling; the orthonormal form is preferred when you
+        want SE / t-ratio values directly comparable across degrees.
 
     Returns
     -------
     D : ndarray of shape ``(min(max_degree, 6, k-1), k)``
         Each row is one polynomial contrast (linear, quadratic, ...).
-        Integer-scaled for ``k <= 20`` (matches R `emmeans::poly.emmc`
-        to floating-point precision); orthonormal-fallback for
-        ``k > 20`` where the integer-scaling LCM blows up.
     names : list[str]
         ``["linear", "quadratic", "cubic", "quartic", "degree 5",
         "degree 6"]`` (truncated to ``max_degree``).
@@ -534,8 +549,12 @@ def opoly(
     ['linear', 'quadratic', 'cubic']
     >>> D.shape
     (3, 4)
-    >>> # Coefficients sum to zero on each row (proper contrasts).
-    >>> np.allclose(D.sum(axis=1), 0)
+    >>> # Integer-scaled rows: norms differ per degree.
+    >>> np.allclose(np.diag(D @ D.T), [20.0, 4.0, 20.0])
+    True
+    >>> D_on, _ = opoly(4, kind="orthonormal")
+    >>> # Orthonormal rows: unit L2 norm per row, R emmeans::opoly.
+    >>> np.allclose(np.diag(D_on @ D_on.T), 1.0)
     True
     """
     if labels is not None and len(labels) != k:
@@ -543,10 +562,19 @@ def opoly(
             f"opoly: labels has length {len(labels)} but k={k}; "
             "labels must align with the number of levels."
         )
+    if kind not in ("integer", "orthonormal"):
+        raise ValueError(
+            f"opoly: kind must be 'integer' or 'orthonormal', got {kind!r}."
+        )
     # The underlying builder ignores labels (polynomials depend only
     # on the equal-spacing assumption). Pass an empty list to keep
     # the call site uniform.
-    return _poly_matrix(k, labels or [], max_degree=max_degree)
+    D, names = _poly_matrix(k, labels or [], max_degree=max_degree)
+    if kind == "orthonormal":
+        row_norms = np.sqrt(np.einsum("ij,ij->i", D, D))
+        # All polynomial contrasts at k >= 2 have non-zero row norms.
+        D = D / row_norms[:, None]
+    return D, names
 
 
 def _consec_matrix(k: int, labels: list[str]) -> tuple[np.ndarray, list[str]]:
@@ -1613,7 +1641,7 @@ def contrast(
     if entry is not None:
         if len(emm.target) != 1:
             raise NotImplementedError(
-                f"'{method}' in v0.1 supports a single target factor only."
+                f"'{method}' currently supports a single target factor only."
             )
         # Adjust precedence (matches R): explicit kwarg > emm_options
         # option > registry default.
@@ -2500,7 +2528,7 @@ def rbind(
         if not isinstance(r, ContrastResult):
             raise TypeError(
                 f"rbind input #{i} is {type(r).__name__}; only "
-                "ContrastResult is supported in v0.1."
+                "ContrastResult is currently supported."
             )
 
     base = results[0]
