@@ -52,8 +52,7 @@ def code(text: str) -> None:
 md(r"""
 # pymmeans — a comprehensive narrative audit against R `emmeans`
 
-**A reproducible software-validation artifact for the Journal of
-Statistical Software.**
+**A reproducible software-validation artifact.**
 
 `pymmeans` is a native-Python re-implementation of R's `emmeans`. This
 notebook validates it **across its full feature surface against a live
@@ -1128,6 +1127,109 @@ print(f"  C(g, Poly) EMMs vs R contr.poly - column name: 'g', max|Δ| ~ {maxabs(
 print("  LS-means are coding-invariant; pymmeans matches R to machine precision under either basis.")
 """)
 
+# --- §VII.7b — opoly() kind="integer" vs kind="orthonormal" (v0.2.5).
+md(r"""
+### VII.7b — `opoly` orthogonal-polynomial contrast matrix (v0.2.5 `kind=`)
+
+R `emmeans` ships two distinct polynomial-contrast helpers — and they
+return different things. ``emmeans::poly.emmc`` returns the *integer-
+scaled* coefficients (rows whose smallest non-trivial scaling makes
+all entries integers); ``emmeans::opoly`` returns the *orthonormal*
+form (each row rescaled to unit L2 norm). Both are mathematically
+valid contrasts and produce identical contrast *estimates* on a fit
+(LS-means are scaling-invariant), but the standard errors and
+t-ratios differ by the row-scaling factor, and downstream
+interpretability is different.
+
+pymmeans's ``opoly`` was historically ``poly.emmc``-style only.
+v0.2.5 added a ``kind="integer" | "orthonormal"`` parameter so users
+porting R code can pick the convention they need. ``kind="integer"``
+is the default for backward compatibility with pre-0.2.5 callers.
+
+This cell verifies five structural identities the two forms must
+satisfy:
+
+1. **Row-sum-zero.** Every row of either matrix sums to 0 — that's
+   the definitional property of a contrast.
+2. **Exact orthogonality.** ``D D'`` is exactly diagonal under
+   either form (no spurious off-diagonal cross-terms).
+3. **Integer-form row norms.** ``diag(D_int D_int')`` matches the
+   known R `poly.emmc` values for k = 4: ``[20, 4, 20]``.
+4. **Orthonormal-form unit norms.** ``diag(D_on D_on') = [1, 1, 1]``
+   exactly.
+5. **Rescaling identity.** ``D_on[i, :] = D_int[i, :] / ‖D_int[i, :]‖``
+   row-by-row, to machine precision.
+
+We also exercise the Stieltjes integer-rational fallback at k = 50
+(triggered for ``k > 20`` per the source) to confirm orthonormality
+survives the high-degree fallback path.
+""")
+code(r"""
+import numpy as np
+from pymmeans import opoly
+
+D_int, names_int = opoly(4, kind="integer")
+D_on,  names_on  = opoly(4, kind="orthonormal")
+
+print("  opoly(4, kind='integer'):")
+print(f"    D =\n{D_int}")
+print(f"    row sums       = {D_int.sum(axis=1)}")
+print(f"    diag(D D')     = {np.diag(D_int @ D_int.T)}")
+print(f"    off-diag(D D') = {float(np.max(np.abs((D_int @ D_int.T) - np.diag(np.diag(D_int @ D_int.T))))):.2e}")
+print()
+print("  opoly(4, kind='orthonormal'):")
+print(f"    D =\n{D_on}")
+print(f"    row sums       = {D_on.sum(axis=1)}")
+print(f"    diag(D D')     = {np.diag(D_on @ D_on.T)}")
+print(f"    off-diag(D D') = {float(np.max(np.abs((D_on @ D_on.T) - np.diag(np.diag(D_on @ D_on.T))))):.2e}")
+
+# Property 1 — row sums are 0 for both forms.
+_max_rs_int = float(np.max(np.abs(D_int.sum(axis=1))))
+_max_rs_on  = float(np.max(np.abs(D_on.sum(axis=1))))
+check("VII.7b", "opoly integer form row sums = 0",
+      _max_rs_int, 1e-12, "structural")
+check("VII.7b", "opoly orthonormal form row sums = 0",
+      _max_rs_on,  1e-12, "structural")
+
+# Property 2 — exact orthogonality (off-diagonal of D D' must be 0).
+_off_int = float(np.max(np.abs((D_int @ D_int.T) - np.diag(np.diag(D_int @ D_int.T)))))
+_off_on  = float(np.max(np.abs((D_on  @ D_on.T)  - np.diag(np.diag(D_on  @ D_on.T)))))
+check("VII.7b", "opoly integer form orthogonality (off-diag D D')",
+      _off_int, 1e-12, "structural")
+check("VII.7b", "opoly orthonormal form orthogonality (off-diag D D')",
+      _off_on,  1e-12, "structural")
+
+# Property 3 — integer-form row norms match R poly.emmc at k=4.
+_expected_int_diag = np.array([20.0, 4.0, 20.0])
+check("VII.7b", "opoly integer form diag(D D') = [20, 4, 20]",
+      float(np.max(np.abs(np.diag(D_int @ D_int.T) - _expected_int_diag))),
+      1e-12, "structural")
+
+# Property 4 — orthonormal-form diag = ones.
+check("VII.7b", "opoly orthonormal form diag(D D') = 1",
+      float(np.max(np.abs(np.diag(D_on @ D_on.T) - 1.0))),
+      1e-12, "structural")
+
+# Property 5 — rescaling identity.
+_row_norms = np.linalg.norm(D_int, axis=1, keepdims=True)
+check("VII.7b", "opoly D_on = D_int / row_norm(D_int)",
+      float(np.max(np.abs(D_on - D_int / _row_norms))),
+      1e-12, "structural")
+
+# k = 50 Stieltjes fallback — orthonormality must still hold.
+D_50, _ = opoly(50, kind="orthonormal")
+_off_50 = float(np.max(np.abs((D_50 @ D_50.T) - np.diag(np.diag(D_50 @ D_50.T)))))
+_diag_50 = float(np.max(np.abs(np.diag(D_50 @ D_50.T) - 1.0)))
+print()
+print(f"  opoly(50, kind='orthonormal'): shape {D_50.shape}")
+print(f"    off-diag(D D') = {_off_50:.2e}")
+print(f"    |diag - 1| max = {_diag_50:.2e}")
+check("VII.7b", "opoly k=50 Stieltjes-fallback orthonormality (off-diag)",
+      _off_50, 1e-12, "structural")
+check("VII.7b", "opoly k=50 Stieltjes-fallback unit row norms",
+      _diag_50, 1e-12, "structural")
+""")
+
 # ================================================================== §VIII
 md(r"""
 # Section VIII — Weighting sensitivity (the analyst's choice matters)
@@ -1568,6 +1670,730 @@ SCORE.append(("XI", "split-plot aovlist == §VI vc_formula (equivalence)",
               0.0, 0.0, "structural"))
 """)
 
+# --- GEE clustered binomial — sandwich-vcov flow-through ----------------------
+md(r"""
+### XI.b — GEE clustered binomial: sandwich vcov flows through to contrast SE
+
+The Generalized Estimating Equations (Liang & Zeger 1986) approach to
+clustered binary outcomes is a workhorse in biostatistics for
+correlated-binary data where a marginal-effects target is preferred
+over a random-effects target. ``statsmodels.formula.api.gee`` returns
+both a *naive* model-based covariance and a *sandwich* (robust-to-
+working-correlation-misspecification) covariance; the sandwich is the
+inferential default and is what ``GEE.fit().cov_params()`` returns.
+
+For pymmeans's adapter to be a faithful EMM front-end for GEE the
+contrast SE must use the SANDWICH covariance, not the naive one.
+Silently degrading to the naive vcov would under- or over-state the
+SE in a way that's invisible to a user comparing point estimates
+only.
+
+This cell constructs a deliberately clustered Bernoulli design (a
+strong cluster random intercept on the log-odds scale induces
+within-cluster correlation that makes naive ≠ sandwich), fits
+``GEE(family=Binomial, cov_struct=Exchangeable)``, and verifies the
+EMM SE pymmeans returns equals ``sqrt(L V_sandwich L')`` to **zero
+absolute error**, AND differs from ``sqrt(L V_naive L')`` by a
+substantively non-trivial amount. That's the structural proof the
+sandwich flows through end-to-end.
+""")
+code(r"""
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+# Clustered binomial with cluster-level random intercept (induces
+# within-cluster correlation that makes naive vs sandwich differ).
+_rng_gee = np.random.default_rng(20260608)
+_n_clust = 40
+_n_per   = 12
+_ids = np.repeat(np.arange(_n_clust), _n_per)
+_g   = np.tile(np.repeat(list("ABCD"), 3), _n_clust)
+_u   = _rng_gee.normal(0, 1.5, _n_clust)[_ids]
+_eta = _u + np.where(_g == "B", 0.5, 0.0) + np.where(_g == "C", 1.0, 0.0)
+_p   = 1.0 / (1.0 + np.exp(-_eta))
+_y   = _rng_gee.binomial(1, _p)
+_df_gee = pd.DataFrame({"id": _ids, "g": _g, "y": _y})
+
+_fit_gee = smf.gee(
+    "y ~ C(g)",
+    groups="id", data=_df_gee,
+    family=sm.families.Binomial(),
+    cov_struct=sm.cov_struct.Exchangeable(),
+).fit()
+
+_V_sandwich = np.asarray(_fit_gee.cov_robust)
+_V_naive    = np.asarray(_fit_gee.cov_naive)
+
+_em_gee = emmeans(_fit_gee, "g")
+_L = np.asarray(_em_gee.linfct)
+_SE_pkg     = _em_gee.frame["SE"].to_numpy()
+_SE_sand_hand = np.sqrt(np.einsum("ij,jk,ik->i", _L, _V_sandwich, _L))
+_SE_naive_hand = np.sqrt(np.einsum("ij,jk,ik->i", _L, _V_naive, _L))
+
+print("  GEE Binomial, Exchangeable cov_struct, 40 clusters × 12 obs:")
+print(_em_gee.frame.to_string(index=False))
+print()
+print(f"  L shape (contrasts x params): {_L.shape}")
+print(f"  pymmeans SE                       = {_SE_pkg}")
+print(f"  hand SE under sandwich vcov       = {_SE_sand_hand}")
+print(f"  hand SE under naive   vcov        = {_SE_naive_hand}")
+print(f"  sandwich/naive ratio              = {_SE_sand_hand / _SE_naive_hand}")
+
+# Contract 1: pymmeans EMM SE matches sandwich-hand-computed SE exactly.
+check("XI.b", "GEE EMM SE matches sqrt(L V_sandwich L') exactly",
+      float(np.max(np.abs(_SE_pkg - _SE_sand_hand))), 1e-12, "structural")
+
+# Contract 2: pymmeans SE differs from naive-hand-computed SE
+# (proves the sandwich is honored, not silently swapped for naive).
+_diff_vs_naive = float(np.max(np.abs(_SE_pkg - _SE_naive_hand)))
+check("XI.b", "GEE EMM SE differs from sqrt(L V_naive L') (sandwich honored)",
+      max(0.0, 1e-4 - _diff_vs_naive),  # require gap of at least 1e-4
+      0.0, "structural")
+
+# Contract 3: pairs() contrast SE also uses sandwich.
+_ct_gee = pairs(_em_gee, adjust="none")
+_L_pairs = np.asarray(_ct_gee.linfct)
+_SE_pairs_pkg = _ct_gee.frame["SE"].to_numpy()
+_SE_pairs_sand = np.sqrt(np.einsum("ij,jk,ik->i", _L_pairs, _V_sandwich, _L_pairs))
+print()
+print(f"  pairs SE (pymmeans)                = {_SE_pairs_pkg}")
+print(f"  pairs SE (sandwich hand-computed)  = {_SE_pairs_sand}")
+check("XI.b", "GEE pairs() contrast SE matches sqrt(L V_sandwich L') exactly",
+      float(np.max(np.abs(_SE_pairs_pkg - _SE_pairs_sand))), 1e-12, "structural")
+""")
+
+# --- linearmodels PanelOLS — entity-effects vcov flow-through ----------------
+md(r"""
+### XI.c — linearmodels `PanelOLS`: entity-effects vcov flows through
+
+The ``linearmodels`` package (Sheppard 2024) provides the canonical
+Python panel-data toolkit. ``PanelOLS(entity_effects=True)`` is the
+within-entity / "fixed-effects" estimator that absorbs entity-
+specific intercepts via within-entity demeaning. The reported
+covariance is the entity-effects-adjusted clustered or homoskedastic
+vcov on the remaining parameters.
+
+linearmodels fits do not expose a patsy ``design_info`` post-fit, so
+the pymmeans adapter accepts the original long-format data via
+``from_linearmodels(fit, data=...)`` and rebuilds the design. This
+cell verifies the full round-trip on a balanced panel:
+
+1. **EMM SE = `sqrt(L V L')` exactly** — the entity-effects vcov
+   reported by ``fit.cov`` passes through the EMM grid construction
+   without modification.
+2. **pairs() contrast SE = `sqrt(L V L')` exactly** — the same vcov
+   flows through to pairwise contrasts.
+3. **Balanced-panel structural property** — with each entity
+   contributing the same number of observations per cell, the EMM
+   SE must be identical across all cells (the within-entity design
+   matrix has the same column distance for every level).
+
+We suppress the (correct, informative) ``UserWarning`` that pymmeans
+emits when neither ``raw_result.model.exog`` nor
+``estimability_basis`` is populated — that is the v0.2.4 audit-F3
+diagnostic for adapters that don't carry the original design matrix
+on the result object. linearmodels is exactly that case, and the
+user has intentionally accepted the assumption that the patsy-
+rebuilt design is full-rank.
+""")
+code(r"""
+import warnings as _w_panel
+
+import numpy as np
+import pandas as pd
+from linearmodels.panel import PanelOLS
+from pymmeans import emmeans, from_linearmodels, pairs
+
+_rng_panel = np.random.default_rng(20260609)
+_n_entity_panel = 8
+_n_time_panel   = 8
+_n_panel = _n_entity_panel * _n_time_panel
+_ent_panel = np.repeat(np.arange(_n_entity_panel), _n_time_panel)
+_tim_panel = np.tile(np.arange(_n_time_panel), _n_entity_panel)
+_g_panel   = np.tile(np.repeat(list("ABCD"), 2), _n_entity_panel)
+_y_panel   = (
+    _rng_panel.normal(0, 5, _n_entity_panel)[_ent_panel]   # entity FE
+    + np.where(_g_panel == "B", 1.0, 0.0)
+    + np.where(_g_panel == "C", 2.0, 0.0)
+    + _rng_panel.normal(0, 1, _n_panel)
+)
+_df_panel = pd.DataFrame({
+    "entity": _ent_panel, "time": _tim_panel,
+    "g": _g_panel, "y": _y_panel,
+})
+_panel = _df_panel.set_index(["entity", "time"])
+_fit_panel = PanelOLS.from_formula(
+    "y ~ 1 + C(g) + EntityEffects", _panel
+).fit()
+print("  PanelOLS entity-effects parameters:")
+print(_fit_panel.params.to_string())
+
+with _w_panel.catch_warnings():
+    _w_panel.simplefilter("ignore", UserWarning)
+    _info_panel = from_linearmodels(_fit_panel, data=_df_panel)
+    _em_panel = emmeans(_info_panel, "g")
+    _ct_panel = pairs(_em_panel, adjust="none")
+
+print()
+print("  emmeans EMMs:")
+print(_em_panel.frame.to_string(index=False))
+
+_V_panel = np.asarray(_fit_panel.cov)
+_L_panel = np.asarray(_em_panel.linfct)
+_SE_panel_pkg  = _em_panel.frame["SE"].to_numpy()
+_SE_panel_hand = np.sqrt(np.einsum("ij,jk,ik->i", _L_panel, _V_panel, _L_panel))
+
+print()
+print(f"  pymmeans EMM SE         = {_SE_panel_pkg}")
+print(f"  hand-computed EMM SE    = {_SE_panel_hand}")
+
+# Contract 1 — EMM SE matches the entity-effects-adjusted vcov exactly.
+check(
+    "XI.c",
+    "PanelOLS EMM SE matches sqrt(L V L') exactly",
+    float(np.max(np.abs(_SE_panel_pkg - _SE_panel_hand))),
+    1e-12, "structural",
+)
+
+# Contract 2 — pairs() contrast SE also flows through unchanged.
+_L_pairs_panel = np.asarray(_ct_panel.linfct)
+_SE_pairs_panel_pkg = _ct_panel.frame["SE"].to_numpy()
+_SE_pairs_panel_hand = np.sqrt(
+    np.einsum("ij,jk,ik->i", _L_pairs_panel, _V_panel, _L_pairs_panel)
+)
+print()
+print(f"  pymmeans pairs SE       = {_SE_pairs_panel_pkg}")
+print(f"  hand-computed pairs SE  = {_SE_pairs_panel_hand}")
+check(
+    "XI.c",
+    "PanelOLS pairs() SE matches sqrt(L V L') exactly",
+    float(np.max(np.abs(_SE_pairs_panel_pkg - _SE_pairs_panel_hand))),
+    1e-12, "structural",
+)
+
+# Contract 3 — balanced panel ⇒ equal cell SEs.
+_se_spread = float(_SE_panel_pkg.max() - _SE_panel_pkg.min())
+print(f"  EMM SE spread (max - min) on balanced design = {_se_spread:.2e}")
+check(
+    "XI.c",
+    "PanelOLS balanced design ⇒ equal cell SEs",
+    _se_spread, 1e-12, "structural",
+)
+""")
+
+# --- Ordinal cum.prob / prob PMF–CDF identity --------------------------------
+md(r"""
+### XI.d — Ordinal `mode="cum.prob"` and the PMF/CDF identity
+
+pymmeans's ordinal adapter (``ordinal_emmeans``) supports five
+response-scale modes — ``latent``, ``prob``, ``cum.prob``,
+``exc.prob``, ``mean.class`` — matching R ``ordinal::clm`` /
+``MASS::polr``. The existing §XI cross-validates ``prob`` and
+``cum.prob`` against R-generated CSV references to ~1e-6 (the GLM-
+optimiser difference between R's IRWLS and statsmodels' BFGS). This
+cell adds an **internal-consistency** proof that the two modes are
+self-consistent, independent of the R reference.
+
+For a J-category cumulative-logit model the per-row probability mass
+function ``P(Y = j | x)`` and the cumulative distribution function
+``P(Y ≤ j | x)`` must satisfy:
+
+1. **PMF sums to 1**: ``Σ_j prob[j] = 1`` for every row of the spec
+   grid.
+2. **PMF/CDF identity**: ``cum.prob[j] = Σ_{k ≤ j} prob[k]`` for all
+   ``j``, to machine precision.
+3. **Monotonicity**: ``cum.prob[0] ≤ cum.prob[1] ≤ ... ≤
+   cum.prob[J−2]`` within each spec level (the highest category is
+   omitted from ``cum.prob`` because ``P(Y ≤ J − 1) = 1``
+   trivially).
+4. **Bounds**: ``cum.prob[j] ∈ [0, 1]`` for all ``j``.
+
+If pymmeans's two modes were computed inconsistently (e.g. ``prob``
+using one threshold parameterisation, ``cum.prob`` using another),
+identity (2) would fail. This is the strongest claim short of an
+external R comparison.
+""")
+code(r"""
+from statsmodels.miscmodels.ordinal_model import OrderedModel
+from pymmeans import ordinal_emmeans
+
+_rng_ord = np.random.default_rng(20260610)
+_n_per_ord = 60
+_g_ord = np.repeat(list("abc"), _n_per_ord)
+_x1_ord = _rng_ord.normal(0, 1, len(_g_ord))
+_z_ord = (
+    np.where(_g_ord == "a", -0.5,
+             np.where(_g_ord == "b", 0.5, 1.5))
+    + 0.5 * _x1_ord
+    + _rng_ord.normal(0, 1, len(_g_ord))
+)
+_y_ord = pd.Categorical(
+    np.digitize(_z_ord, [-1.0, 0.5, 2.0]),
+    categories=[0, 1, 2, 3], ordered=True,
+)
+_df_ord = pd.DataFrame({
+    "g":  pd.Categorical(_g_ord, categories=["a", "b", "c"]),
+    "x1": _x1_ord,
+    "y":  _y_ord,
+})
+_fit_ord = OrderedModel.from_formula(
+    "y ~ x1 + g", _df_ord, distr="logit",
+).fit(method="bfgs", disp=False)
+
+_pmf_ord  = ordinal_emmeans(_fit_ord, "g", mode="prob").frame
+_cdf_ord  = ordinal_emmeans(_fit_ord, "g", mode="cum.prob").frame
+
+print(f"  J = {_pmf_ord['category'].nunique()} categories, "
+      f"{_pmf_ord['g'].nunique()} spec levels")
+print()
+print("  cum.prob frame:")
+print(_cdf_ord.to_string(index=False))
+
+# Property 1 — PMF sums to 1 per spec level.
+_pmf_sum_max_dev = 0.0
+for _level in sorted(_pmf_ord["g"].unique()):
+    _s = float(_pmf_ord.loc[_pmf_ord["g"] == _level, "emmean"].sum())
+    _pmf_sum_max_dev = max(_pmf_sum_max_dev, abs(_s - 1.0))
+check("XI.d", "ordinal prob: PMF sums to 1 per spec level",
+      _pmf_sum_max_dev, 1e-12, "structural")
+
+# Property 2 — cum.prob == cumsum(prob) row-by-row.
+_pmf_cdf_max_err = 0.0
+for _level in sorted(_pmf_ord["g"].unique()):
+    _pmf_g = _pmf_ord.loc[_pmf_ord["g"] == _level, "emmean"].to_numpy()
+    _cdf_g = _cdf_ord.loc[_cdf_ord["g"] == _level, "emmean"].to_numpy()
+    # cum.prob frame has J-1 rows; PMF frame has J. Compare first J-1.
+    _hand_cdf = np.cumsum(_pmf_g)[:len(_cdf_g)]
+    _pmf_cdf_max_err = max(_pmf_cdf_max_err,
+                            float(np.max(np.abs(_cdf_g - _hand_cdf))))
+print()
+print(f"  max|cum.prob - cumsum(prob)| over all (g, j) = "
+      f"{_pmf_cdf_max_err:.2e}")
+check("XI.d", "ordinal PMF/CDF identity: cum.prob = cumsum(prob)",
+      _pmf_cdf_max_err, 1e-12, "structural")
+
+# Property 3 — cum.prob is monotone non-decreasing in category within
+# each spec level.
+_max_decrease = 0.0
+for _level in sorted(_cdf_ord["g"].unique()):
+    _c = _cdf_ord.loc[_cdf_ord["g"] == _level, "emmean"].to_numpy()
+    _diffs = np.diff(_c)
+    _max_decrease = max(_max_decrease, float(max(0.0, -_diffs.min())))
+check("XI.d", "ordinal cum.prob monotone non-decreasing in category",
+      _max_decrease, 1e-12, "structural")
+
+# Property 4 — cum.prob in [0, 1].
+_cp_min = float(_cdf_ord["emmean"].min())
+_cp_max = float(_cdf_ord["emmean"].max())
+_oob = max(0.0, -_cp_min) + max(0.0, _cp_max - 1.0)
+check("XI.d", "ordinal cum.prob bounded to [0, 1]",
+      _oob, 1e-12, "structural")
+""")
+
+# --- LogNormal AFT == OLS on log(time) closed-form identity ------------------
+md(r"""
+### XI.e — LogNormal AFT location equals OLS on log(time)
+
+The lognormal accelerated-failure-time (AFT) model parameterises
+
+$$\log T_i = X_i \beta + \sigma \epsilon_i, \qquad \epsilon_i \sim N(0, 1)$$
+
+so on UNCENSORED data the log-likelihood is the same as OLS on
+``log T``. The maximum-likelihood location parameter must therefore
+equal the OLS coefficient bit-exactly (up to optimiser convergence),
+and the AFT scale must equal the OLS residual SE up to the
+``sqrt(n / (n-p))`` MLE-vs-unbiased factor (MLE uses ``SSE / n``,
+OLS uses ``SSE / (n-p)``).
+
+This identity provides a closed-form check of the pymmeans
+``from_aft`` adapter end-to-end:
+
+1. **Location EMM identity.** ``emmeans(from_aft(lognormal_aft), 'g')``
+   must match ``emmeans(ols_on_log_t, 'g')`` to optimiser precision
+   on the location column.
+2. **SE ratio identity.** The OLS / AFT cell-SE ratio must equal
+   ``sqrt(n / (n-p))`` across all cells, with no per-cell deviation.
+
+If pymmeans's AFT adapter were silently mis-locating the scale
+parameter or mis-routing the contrast through the wrong block of
+``params_``, identity (1) would shift and (2) would lose its
+across-cell uniformity. This is the strongest closed-form check the
+adapter admits without a censored-data reference.
+""")
+code(r"""
+import warnings as _w_aft
+
+from lifelines import LogNormalAFTFitter
+from pymmeans import emmeans, from_aft
+
+_rng_aft = np.random.default_rng(20260611)
+_n_aft   = 240            # divisible by 3 for balanced groups
+_g_aft   = np.repeat(list("ABC"), _n_aft // 3)
+_x_aft   = _rng_aft.normal(0, 1, _n_aft)
+_eta_aft = (
+    1.0
+    + 0.5 * _x_aft
+    + np.where(_g_aft == "B", 0.3, 0.0)
+    + np.where(_g_aft == "C", 0.7, 0.0)
+)
+_sigma_aft = 0.4
+_log_t_aft = _eta_aft + _sigma_aft * _rng_aft.standard_normal(_n_aft)
+_t_aft = np.exp(_log_t_aft)
+_df_aft = pd.DataFrame({
+    "T": _t_aft, "g": pd.Categorical(_g_aft),
+    "x": _x_aft,
+    "E": np.ones(_n_aft, dtype=int),    # all events, no censoring
+})
+
+# OLS on log(T) — closed-form reference.
+_fit_ols_aft = smf.ols("np.log(T) ~ g + x", _df_aft).fit()
+_em_ols = emmeans(_fit_ols_aft, "g").frame.sort_values("g").reset_index(drop=True)
+
+# LogNormal AFT MLE via lifelines + pymmeans from_aft adapter.
+with _w_aft.catch_warnings():
+    _w_aft.simplefilter("ignore", UserWarning)
+    _fit_aft = LogNormalAFTFitter().fit(
+        _df_aft, duration_col="T", event_col="E", formula="g + x",
+    )
+    _info_aft = from_aft(_fit_aft, _df_aft, formula="g + x")
+    _em_aft = emmeans(_info_aft, "g").frame.sort_values("g").reset_index(drop=True)
+
+print("  OLS on log(T) EMMs:")
+print(_em_ols.to_string(index=False))
+print()
+print("  LogNormal AFT EMMs (via pymmeans from_aft):")
+print(_em_aft.to_string(index=False))
+
+# Contract 1 — location EMM matches OLS to optimiser precision.
+_delta_mean = float(
+    np.max(np.abs(_em_aft["emmean"].to_numpy() - _em_ols["emmean"].to_numpy()))
+)
+print()
+print(f"  max|AFT.emmean - OLS.emmean| = {_delta_mean:.2e}")
+check("XI.e", "LogNormal AFT location EMM = OLS on log(T)",
+      _delta_mean, 1e-4, "optimiser")
+
+# Contract 2 — SE ratio equals sqrt(n / (n-p)) across all cells.
+_n_params_ols = int(_fit_ols_aft.params.size)
+_ratio_theory = float(np.sqrt(_n_aft / (_n_aft - _n_params_ols)))
+_ratio_emp = (
+    _em_ols["SE"].to_numpy() / _em_aft["SE"].to_numpy()
+)
+print(f"  OLS.SE / AFT.SE per cell = {_ratio_emp}")
+print(f"  theoretical sqrt(n/(n-p)) = sqrt({_n_aft}/{_n_aft - _n_params_ols}) "
+      f"= {_ratio_theory:.6f}")
+_delta_ratio = float(np.max(np.abs(_ratio_emp - _ratio_theory)))
+check("XI.e", "SE ratio = sqrt(n/(n-p)) — MLE-vs-unbiased scale identity",
+      _delta_ratio, 1e-6, "optimiser")
+
+# Contract 3 — ratio is uniform across cells (per-cell spread = 0).
+_ratio_spread = float(_ratio_emp.max() - _ratio_emp.min())
+print(f"  SE-ratio spread across cells = {_ratio_spread:.2e}")
+check("XI.e", "AFT/OLS SE ratio uniform across cells",
+      _ratio_spread, 1e-9, "structural")
+""")
+
+# --- Variance-clamp warning demo (v0.2.5 observability fix) ------------------
+md(r"""
+### XI.f — KR / Satterthwaite variance-clamp emits `RuntimeWarning` (v0.2.5)
+
+The Kenward-Roger / Satterthwaite small-sample correction is **not
+guaranteed** to produce a positive-definite ``V_corrected``. At
+boundary REML fits — where one variance component is estimated at
+exactly zero, or near the parameter-space boundary — the
+``L V_corrected L'`` diagonal can take a small but truly negative
+value. Pre-v0.2.5 the package silently clamped the SE to 0 in that
+regime; v0.2.5 surfaces it as a ``RuntimeWarning`` with three
+diagnostic markers (auditor V12-A3 F4):
+
+1. an explicit string ``"negative L V Lᵀ diagonal entries"``,
+2. the offending correction method name (``"kenward_roger"`` or
+   ``"satterthwaite"``),
+3. a pointer to ``health_check(fit)`` for remediation.
+
+Reliably constructing a boundary REML fit that triggers this in a
+notebook is fragile (depends on optimiser convergence path), so we
+verify the observability fix directly by calling the internal
+``_apply_correction`` helper twice: once with a well-conditioned
+``V_corrected`` (must be silent) and once with a deliberately-
+constructed non-PSD ``V_corrected`` (must warn). The contract is
+the v0.2.5 behaviour — the audit found this clamp was silent
+pre-fix and the regression test prevents it from going silent
+again.
+""")
+code(r"""
+import warnings as _w_clamp
+
+from pymmeans import pairs
+from pymmeans.satterthwaite import _apply_correction as _apply_corr
+
+# Build a small pairwise-contrast ContrastResult that has a 1-row
+# linfct on the OLS parameter space — small enough that we can
+# control L V L' by hand.
+_rng_clamp = np.random.default_rng(20260612)
+_df_clamp = pd.DataFrame({
+    "g": pd.Categorical(np.repeat(list("AB"), 10)),
+    "y": _rng_clamp.standard_normal(20),
+})
+_fit_clamp = smf.ols("y ~ C(g)", _df_clamp).fit()
+_em_clamp  = emmeans(_fit_clamp, "g")
+_ct_clamp  = pairs(_em_clamp)
+print(f"  contrast L = {_ct_clamp.linfct}")
+
+# Case 1 — PSD V_corrected. Must produce no warning.
+_V_psd_clamp = np.diag([1.0, 0.5])
+_raw_psd = np.einsum("ij,jk,ik->i", _ct_clamp.linfct, _V_psd_clamp, _ct_clamp.linfct)
+print(f"  PSD V_corrected: diag(L V L') = {_raw_psd}")
+with _w_clamp.catch_warnings(record=True) as _ws1:
+    _w_clamp.simplefilter("always")
+    _ = _apply_corr(_ct_clamp, _V_psd_clamp, np.array([18.0]),
+                    method="satterthwaite")
+    _n_warn_psd = len(_ws1)
+print(f"  warnings under PSD V: {_n_warn_psd}  (expect 0)")
+check("XI.f", "KR/Satt clamp silent under PSD V_corrected",
+      float(_n_warn_psd), 0.0, "structural")
+
+# Case 2 — non-PSD V_corrected. Constructed so that L V L' < 0.
+_V_npd_clamp = np.diag([1.0, -1.0])
+_raw_npd = np.einsum("ij,jk,ik->i", _ct_clamp.linfct, _V_npd_clamp, _ct_clamp.linfct)
+print(f"\n  non-PSD V_corrected: diag(L V L') = {_raw_npd}  (negative!)")
+with _w_clamp.catch_warnings(record=True) as _ws2:
+    _w_clamp.simplefilter("always")
+    _out_npd = _apply_corr(_ct_clamp, _V_npd_clamp, np.array([18.0]),
+                           method="kenward_roger")
+    _n_warn_npd = len(_ws2)
+    _msg = str(_ws2[0].message) if _ws2 else ""
+    _cat = _ws2[0].category.__name__ if _ws2 else ""
+print(f"  warnings under non-PSD V: {_n_warn_npd}  (expect 1)")
+print(f"  category: {_cat}")
+print(f"  message excerpt:\n    {_msg[:140]}...")
+check("XI.f", "KR/Satt clamp emits RuntimeWarning under non-PSD V_corrected",
+      float(not (_n_warn_npd == 1 and _cat == "RuntimeWarning")),
+      0.0, "structural")
+check("XI.f", "warning message names the offending method",
+      float(not ("kenward_roger" in _msg)), 0.0, "structural")
+check("XI.f", "warning message points at health_check()",
+      float(not ("health_check" in _msg)), 0.0, "structural")
+check("XI.f", "warning message explicitly names negative L V Lᵀ",
+      float(not ("negative L V Lᵀ" in _msg)), 0.0, "structural")
+
+# Case 3 — SE clamped to 0 (not NaN), so downstream contracts don't crash.
+_se_clamped = _out_npd.frame["SE"].to_numpy()
+print(f"\n  SE after clamp: {_se_clamped.tolist()}  (must be 0, not NaN)")
+check("XI.f", "non-PSD V_corrected ⇒ SE clamped to 0 (not NaN)",
+      float(np.max(np.abs(_se_clamped))) if not np.any(np.isnan(_se_clamped))
+      else float("inf"),
+      0.0, "structural")
+""")
+
+# --- V.b ext — TOST boundary identity + cross_adjust closure principle -------
+md(r"""
+### V.b — TOST boundary identity + `cross_adjust` closure principle
+
+§V.2 cross-validates the equivalence-test (TOST) and non-inferiority
+machinery against R numerically. This cell adds two independent
+**closed-form** structural identities that do not need an R
+reference.
+
+**TOST boundary.** Schuirmann (1987) defines the two-one-sided-t
+equivalence procedure as ``p_TOST = max(p_low, p_high)`` where the
+one-sided p-values test ``H_0: |μ_1 - μ_2| ≥ δ``. At the boundary
+``|estimate| = δ`` exactly, one of the two t-statistics is zero
+(the corresponding null hypothesis sits exactly at the data
+estimate) so its one-sided p-value is **exactly 0.5**. The TOST
+combined p-value must therefore equal 0.5 at the boundary, for
+any contrast and any df.
+
+**TOST monotonicity.** Holding the data fixed and scanning δ from
+``0`` upward, ``p_TOST`` must be monotone decreasing — as the
+declared equivalence margin gets more permissive, more contrasts
+qualify as equivalent.
+
+**`cross_adjust` pool-Bonferroni closure.** When ``cross_adjust=
+'bonferroni'`` is applied to a pool of ``N`` contrasts spread over
+multiple families (constructed via ``by=``), the closure principle
+(Marcus, Peritz & Gabriel 1976) collapses to the simple pool-
+Bonferroni identity
+
+$$\tilde{p}_i = \min\!\big(1, \, p_i \cdot N\big)$$
+
+where ``N`` is the total number of contrasts across all families
+in the pool (not the family count). This is the conservative
+pool-Bonferroni — auditor V12-A4 noted this matches R
+``emmeans::summary(cross.adjust=...)``'s composition. The identity
+is verifiable to **0.0 absolute** without an R reference.
+""")
+code(r"""
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import contrast, emmeans, pairs, summary, test
+
+# --- TOST boundary ---------------------------------------------------------
+_rng_tost = np.random.default_rng(20260613)
+_g_tost   = np.repeat(list("ABC"), 30)
+_y_tost   = (
+    _rng_tost.standard_normal(len(_g_tost))
+    + np.where(_g_tost == "B", 0.4, 0.0)
+    + np.where(_g_tost == "C", 0.8, 0.0)
+)
+_df_tost = pd.DataFrame({"g": pd.Categorical(_g_tost), "y": _y_tost})
+_fit_tost = smf.ols("y ~ C(g)", _df_tost).fit()
+_em_tost  = emmeans(_fit_tost, "g")
+_ct_tost  = contrast(_em_tost, method="pairwise", adjust="none")
+print("  Pairwise contrasts under H_A:")
+print(_ct_tost.frame[["contrast", "estimate", "SE", "t_ratio", "p_value"]]
+      .to_string(index=False))
+print()
+
+# At delta = |estimate|, p_TOST = 0.5 exactly (Schuirmann boundary).
+_boundary_max_err = 0.0
+for _i in range(len(_ct_tost.frame)):
+    _row = _ct_tost.frame.iloc[_i]
+    _cn  = _row["contrast"]
+    _est = abs(float(_row["estimate"]))
+    _te  = test(_ct_tost, delta=_est, side="equivalence")
+    _p   = float(_te.loc[_te["contrast"] == _cn, "p_value"].iloc[0])
+    print(f"  {_cn}: |est|={_est:.4f}  delta={_est:.4f}  p_TOST={_p:.6f}  "
+          f"(expect 0.500000)")
+    _boundary_max_err = max(_boundary_max_err, abs(_p - 0.5))
+check("V.b", "TOST p = 0.5 at |estimate| = delta boundary",
+      _boundary_max_err, 1e-12, "structural")
+
+# --- TOST monotonicity (scan delta/|est| in (0.5, 2.0) and check p decreases)
+print()
+_row_mon = _ct_tost.frame.iloc[0]
+_cn_mon  = _row_mon["contrast"]
+_est_mon = abs(float(_row_mon["estimate"]))
+print(f"  Monotonicity scan for {_cn_mon}, |est|={_est_mon:.4f}:")
+_ratios = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+_p_scan = []
+for _r in _ratios:
+    _te = test(_ct_tost, delta=_r * _est_mon, side="equivalence")
+    _p = float(_te.loc[_te["contrast"] == _cn_mon, "p_value"].iloc[0])
+    _p_scan.append(_p)
+    print(f"    delta/|est|={_r:.2f}: p_TOST = {_p:.6f}")
+# Monotone decreasing.
+_diffs = np.diff(_p_scan)
+_max_increase = float(max(0.0, _diffs.max()))
+check("V.b", "TOST p monotone decreasing as delta grows",
+      _max_increase, 1e-12, "structural")
+
+# --- cross_adjust closure principle (pool-Bonferroni identity) ------------
+print()
+_rng_cross = np.random.default_rng(20260613)
+_g_cross    = pd.Categorical(_rng_cross.choice(["a", "b", "c"], 300))
+_block_cross = pd.Categorical(_rng_cross.choice(["x", "y"], 300))
+_y_cross = (
+    (np.asarray(_g_cross) == "b") * 0.6
+    + (np.asarray(_g_cross) == "c") * 1.1
+    + _rng_cross.normal(scale=1.0, size=300)
+)
+_df_cross = pd.DataFrame({"g": _g_cross, "block": _block_cross, "y": _y_cross})
+_fit_cross = smf.ols("y ~ g * block", _df_cross).fit()
+_ct_cross  = pairs(emmeans(_fit_cross, "g", by="block"))
+
+_base_cross = summary(_ct_cross, adjust="none")
+_with_cross = summary(_ct_cross, adjust="none", cross_adjust="bonferroni")
+_n_families = len(set(_base_cross["block"]))
+_n_pool = len(_base_cross)
+print(f"  {_n_families} families × {_n_pool // _n_families} contrasts/family "
+      f"= {_n_pool} contrasts in pool")
+
+# Closure-principle identity: cross_p = min(1, base_p * N_pool).
+_p_base    = _base_cross["p_value"].to_numpy()
+_p_cross   = _with_cross["p_value"].to_numpy()
+_p_expected = np.minimum(1.0, _p_base * _n_pool)
+_cross_max_err = float(np.max(np.abs(_p_cross - _p_expected)))
+print(f"  base p-values:        {_p_base}")
+print(f"  cross-adjusted:       {_p_cross}")
+print(f"  expected min(1, p*{_n_pool}): {_p_expected}")
+print(f"  max|p_cross - min(1, p_base * N_pool)| = {_cross_max_err:.2e}")
+check(
+    "V.b",
+    "cross_adjust='bonferroni' = min(1, p_base * N_pool) identity",
+    _cross_max_err, 1e-12, "structural",
+)
+""")
+
+# --- V.c — Effect-size closed-form identities (η², ω², Cohen's f) -----------
+md(r"""
+### V.c — Effect-size closed-form identities (`eta_squared`)
+
+``pymmeans.eta_squared(model)`` returns four effect-size summaries
+per term: the omnibus F-statistic, partial η², Hays' ω², and
+Cohen's f, with a 90% noncentral-F CI on partial η². Each has a
+**closed-form** definition straight from ``statsmodels.stats.anova
+.anova_lm``'s SS partition; the identities can be verified to
+machine precision without an external reference:
+
+1. **F**: ``F = (SS_effect / df_num) / MS_error`` — matches
+   ``anova_lm(typ=2)``'s ``F``.
+2. **Partial η²**: ``SS_effect / (SS_effect + SS_error)`` — Cohen
+   (1988) Eq. 8.1.5.
+3. **Hays' ω²**: ``(SS_effect − df_num · MS_error) /
+   (SS_total + MS_error)`` — Hays (1994) p. 469.
+4. **Cohen's f**: ``sqrt(partial_η² / (1 − partial_η²))`` — Cohen
+   (1988) Eq. 8.2.18.
+
+If the implementation silently mis-routed one term's SS, or used
+the *un-corrected* total SS for ω² (a common confusion with the
+``ω²_p`` "partial omega" variant), these identities would fail.
+""")
+code(r"""
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from statsmodels.stats.anova import anova_lm
+from pymmeans import eta_squared
+
+_rng_es = np.random.default_rng(0)
+_n_per_es = 30
+_df_es = pd.DataFrame({
+    "g": np.repeat(list("ABCD"), _n_per_es),
+    "y": (
+        _rng_es.normal(size=4 * _n_per_es)
+        + np.repeat([0.0, 0.5, 1.0, 1.5], _n_per_es)
+    ),
+})
+_fit_es = smf.ols("y ~ C(g)", _df_es).fit()
+_eta_pkg = eta_squared(_fit_es)
+_aov = anova_lm(_fit_es, typ=2)
+
+_pkg = _eta_pkg[_eta_pkg["term"] == "C(g)"].iloc[0]
+_SS_eff   = float(_aov.loc["C(g)", "sum_sq"])
+_SS_err   = float(_aov.loc["Residual", "sum_sq"])
+_SS_tot   = _SS_eff + _SS_err
+_df_num   = float(_aov.loc["C(g)", "df"])
+_df_denom = float(_aov.loc["Residual", "df"])
+_MS_err   = _SS_err / _df_denom
+
+_F_hand        = (_SS_eff / _df_num) / _MS_err
+_partial_eta2  = _SS_eff / (_SS_eff + _SS_err)
+_omega2        = (_SS_eff - _df_num * _MS_err) / (_SS_tot + _MS_err)
+_cohens_f      = float(np.sqrt(_partial_eta2 / (1.0 - _partial_eta2)))
+
+print("  pymmeans eta_squared output for C(g):")
+print(_eta_pkg.to_string(index=False))
+print()
+print(f"  closed-form:  F={_F_hand:.10f}  partial η²={_partial_eta2:.10f}  "
+      f"ω²={_omega2:.10f}  Cohen's f={_cohens_f:.10f}")
+print(f"  pymmeans:     F={float(_pkg['F']):.10f}  "
+      f"partial η²={float(_pkg['eta_sq_partial']):.10f}  "
+      f"ω²={float(_pkg['omega_sq']):.10f}  Cohen's f={float(_pkg['cohens_f']):.10f}")
+
+check("V.c", "F = (SS_effect/df_num) / MS_error  (anova_lm identity)",
+      abs(float(_pkg["F"]) - _F_hand), 1e-10, "structural")
+check("V.c", "partial η² = SS_eff / (SS_eff + SS_err)  (Cohen 1988)",
+      abs(float(_pkg["eta_sq_partial"]) - _partial_eta2), 1e-12, "structural")
+check("V.c", "ω² = (SS_eff − df₁·MS_err) / (SS_tot + MS_err)  (Hays 1994)",
+      abs(float(_pkg["omega_sq"]) - _omega2), 1e-12, "structural")
+check("V.c", "Cohen's f = sqrt(η²_p / (1 − η²_p))",
+      abs(float(_pkg["cohens_f"]) - _cohens_f), 1e-12, "structural")
+""")
+
 # ==================================================================== §XII
 md(r"""
 # Section XII — Capabilities beyond R `emmeans`
@@ -1840,9 +2666,598 @@ check("XII", "multivariate Poisson y2 posterior mean vs R glm",
       diff_y2, 2e-2, "Monte Carlo")
 """)
 
+# ------------------------------------------------------------------ §XII.5
+md(r"""
+## XII.5 — Bayesian two-seed posterior stability
+
+§XII.2 verified that pymmeans's ``posterior_emmeans`` converges to
+the frequentist EMM at the Monte Carlo rate when fed draws from the
+exact frequentist sampling posterior. This cell adds the
+complementary **two-seed identity**: under any pair of independent
+Monte Carlo subsamples of size ``N`` from the same posterior, the
+posterior means must agree to within ``sqrt(2) × MCSE`` per cell
+(the standard deviation of the difference of two independent
+estimates of the same mean).
+
+We use ``MCSE = freq_SE / sqrt(N)`` as the per-cell theoretical Monte
+Carlo standard error and apply a 3 ``sqrt(2)`` MCSE acceptance band
+(the standard 3-sigma process-control threshold against a routine
+seed roll). If the package's per-draw ``L β`` machinery were
+permutation-sensitive or non-deterministic with seed, this identity
+would fail.
+""")
+code(r"""
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, posterior_emmeans
+from pymmeans.posterior import PosteriorInfo
+
+_rng_pstab = np.random.default_rng(20260615)
+_n_per_pstab = 30
+_df_pstab = pd.DataFrame({
+    "g": pd.Categorical(np.repeat(list("ABCD"), _n_per_pstab)),
+    "y": (
+        _rng_pstab.standard_normal(4 * _n_per_pstab)
+        + np.repeat([0.0, 0.5, 1.0, 1.5], _n_per_pstab)
+    ),
+})
+_fit_pstab = smf.ols("y ~ g", _df_pstab).fit()
+_em_pstab  = emmeans(_fit_pstab, "g")
+_freq_pstab = (
+    _em_pstab.frame.sort_values("g").reset_index(drop=True)
+)
+_freq_se   = _freq_pstab["SE"].to_numpy()
+
+_N_draws_pstab = 200_000
+_mu_hat = np.asarray(_fit_pstab.params)
+_V_hat  = np.asarray(_fit_pstab.cov_params())
+
+def _posterior_at_seed(_seed: int):
+    _rng = np.random.default_rng(_seed)
+    _draws = _rng.multivariate_normal(_mu_hat, _V_hat, size=_N_draws_pstab)
+    _pinfo = PosteriorInfo(beta_samples=_draws,
+                            model_info=_em_pstab.model_info)
+    return (posterior_emmeans(_pinfo, "g").frame
+            .sort_values("g").reset_index(drop=True))
+
+_post1 = _posterior_at_seed(1)
+_post2 = _posterior_at_seed(2)
+_mcse_pstab = _freq_se / np.sqrt(_N_draws_pstab)
+_combined_mcse = _mcse_pstab * np.sqrt(2.0)
+_diff_seeds = np.abs(
+    _post1["emmean"].to_numpy() - _post2["emmean"].to_numpy()
+)
+
+print(f"  N_draws = {_N_draws_pstab:,}")
+print(f"  per-cell MCSE = freq_SE / sqrt(N) = {_mcse_pstab}")
+print(f"  combined MCSE (sqrt(2)·MCSE)     = {_combined_mcse}")
+print(f"  seed-1 mean: {_post1['emmean'].to_numpy()}")
+print(f"  seed-2 mean: {_post2['emmean'].to_numpy()}")
+print(f"  |seed1 - seed2|: {_diff_seeds}")
+print(f"  max |diff| / combined_MCSE = "
+      f"{float(np.max(_diff_seeds / _combined_mcse)):.3f}  (expect <= 3)")
+
+# Per-cell excess over the 3 sqrt(2) MCSE bound.
+_excess = np.maximum(0.0, _diff_seeds - 3.0 * _combined_mcse)
+check("XII.5", "Bayesian two-seed stability |Δ| ≤ 3·sqrt(2)·MCSE",
+      float(np.max(_excess)), 1e-12, "Monte Carlo")
+""")
+
+# ------------------------------------------------------------------ §XII.6
+md(r"""
+## XII.6 — 1/√N Monte Carlo scaling (CLT verification)
+
+The central limit theorem predicts that the Monte Carlo standard
+error of ``posterior_emmeans``'s posterior mean scales as
+``1 / sqrt(N)`` in the number of draws. This is the foundational
+assumption behind every posterior-mean confidence band the package
+emits.
+
+We verify the scaling empirically by running ``R = 100``
+replications at each of four sample sizes ``N ∈ {1_000, 4_000,
+16_000, 64_000}``, recording the empirical standard deviation of the
+posterior mean across replications, and fitting a log-log slope.
+The CLT predicts a slope of **exactly −0.5**; under correct Monte
+Carlo behaviour the empirical slope must match within 0.05 (a wide
+band that accounts for the finite ``R``).
+
+*Coverage scope note.* pymmeans does **not** enforce posterior
+convergence checks (R-hat / divergences / ESS) at ingest time — that
+is the user's responsibility. The 1/sqrt(N) scaling assumes the
+draws are stationary and independent; if a real PyMC chain is
+non-converged, the *constant prefactor* in ``MCSE = c / sqrt(N)``
+inflates but the scaling exponent stays at −0.5 anyway. The cell
+documents this scope.
+""")
+code(r"""
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, posterior_emmeans
+from pymmeans.posterior import PosteriorInfo
+
+_rng_clt = np.random.default_rng(20260615)
+_n_per_clt = 30
+_df_clt = pd.DataFrame({
+    "g": pd.Categorical(np.repeat(list("ABCD"), _n_per_clt)),
+    "y": (
+        _rng_clt.standard_normal(4 * _n_per_clt)
+        + np.repeat([0.0, 0.5, 1.0, 1.5], _n_per_clt)
+    ),
+})
+_fit_clt = smf.ols("y ~ g", _df_clt).fit()
+_em_clt  = emmeans(_fit_clt, "g")
+_freq_clt_se = (
+    _em_clt.frame.sort_values("g")["SE"].to_numpy()
+)
+_mu_clt = np.asarray(_fit_clt.params)
+_V_clt  = np.asarray(_fit_clt.cov_params())
+
+_N_grid = [1_000, 4_000, 16_000, 64_000]
+_R_reps = 100
+_emp_mcse = []
+for _N in _N_grid:
+    _means_N = np.zeros((_R_reps, 4))
+    for _r in range(_R_reps):
+        _sub_rng = np.random.default_rng(20260615 + 1000 * _N + _r)
+        _draws = _sub_rng.multivariate_normal(_mu_clt, _V_clt, size=_N)
+        _pinfo = PosteriorInfo(beta_samples=_draws,
+                                model_info=_em_clt.model_info)
+        _post_N = (posterior_emmeans(_pinfo, "g").frame
+                   .sort_values("g").reset_index(drop=True))
+        _means_N[_r] = _post_N["emmean"].to_numpy()
+    _sd = _means_N.std(axis=0, ddof=1)
+    _emp_mcse.append(_sd.mean())   # averaged over cells
+
+_emp_mcse_arr = np.array(_emp_mcse)
+_theo_mcse_arr = np.array([(_freq_clt_se / np.sqrt(_N)).mean() for _N in _N_grid])
+_logN = np.log(np.array(_N_grid, dtype=float))
+_logE = np.log(_emp_mcse_arr)
+_slope = float(np.polyfit(_logN, _logE, 1)[0])
+
+print(f"  R = {_R_reps} replications per N value")
+print(f"  {'N':>7s}  {'empirical MCSE':>16s}  {'theoretical':>13s}  ratio")
+for _N, _e, _t in zip(_N_grid, _emp_mcse_arr, _theo_mcse_arr, strict=True):
+    print(f"  {_N:>7d}  {_e:>16.5e}  {_t:>13.5e}  {_e/_t:>6.3f}")
+print()
+print(f"  log-log slope of empirical MCSE vs N: {_slope:.4f}  "
+      f"(CLT predicts −0.5)")
+
+check("XII.6", "1/sqrt(N) scaling — log-log slope ≈ -0.5",
+      abs(_slope + 0.5), 0.05, "Monte Carlo")
+
+# Also pin the empirical-to-theoretical ratio at each N to within 20%
+# (combined sampling error + finite R noise).
+_ratios = _emp_mcse_arr / _theo_mcse_arr
+_max_ratio_dev = float(np.max(np.abs(_ratios - 1.0)))
+print(f"  max |empirical/theoretical − 1| = {_max_ratio_dev:.3f}")
+check("XII.6", "empirical MCSE matches freq_SE/sqrt(N) to ±20%",
+      _max_ratio_dev, 0.20, "Monte Carlo")
+""")
+
 # ================================================================== §XIII
 md(r"""
-# Section XIII — Validation scorecard
+# Section XIII — Statistical-guarantee Monte Carlos
+
+The cells in sections I–XII demonstrate that pymmeans reproduces R
+``emmeans``'s **numbers** — point estimates, SEs, dfs, p-values — at
+the documented precision floor of each operation. That is the
+direct-cross-validation evidence.
+
+This section is the **independent statistical-properties evidence**.
+A package whose point estimates match R can still get the statistical
+machinery wrong; the only way to demonstrate that the inference layer
+is calibrated is to *simulate from the null distribution* and check
+that the package's p-values, CIs and FWER controls land where theory
+says they should land. We do that here.
+
+The four cells below cover:
+
+* **§XIII.1** — the unadjusted p-values returned by ``pairs()`` are
+  Uniform[0, 1] under H₀ (the definitional property of a valid
+  p-value);
+* **§XIII.2** — six family-wise multiplicity adjustments
+  (``bonferroni``, ``sidak``, ``holm``, ``tukey``, ``dunnett``, the
+  Benjamini–Hochberg ``bh`` step-up) each control FWER at the nominal
+  level under H₀;
+* **§XIII.3** — Wald confidence intervals on EMMs cover the true mean
+  at the nominal probability across levels 0.80, 0.95, 0.99;
+* **§XIII.4** — empirical power matches the closed-form noncentral-t
+  expectation under a known H₁ shift.
+
+Each cell uses simulated data, so the only thing being measured is
+the calibration of the pymmeans inference layer. Independence from
+R is a feature here: if pymmeans's p-values were systematically too
+small, a numerical-agreement-with-R check would not catch it because
+R has the same potential failure mode. A null-distribution simulation
+will.
+""")
+
+# --- §XIII.1 — p-value uniformity under H₀.
+code(r"""
+# §XIII.1 — p-value uniformity under H₀.
+#
+# Under H₀ (all group means equal), the marginal distribution of the
+# unadjusted p-value returned by ``pairs(em, adjust='none')`` for any
+# fixed pairwise contrast is Uniform[0, 1] by the definitional
+# property of a valid p-value (Casella & Berger 2002 §8.3.4).
+# Pooling within a single fit is not iid (pairwise t's share the
+# variance estimate), but the marginal of any single contrast across
+# independent replications is.
+#
+# Protocol. B = 5_000 replications of a balanced 4-group OLS with
+# n = 15 per group (df_resid = 56). On each replication: simulate y
+# from N(0, 1), fit ``y ~ C(g)``, take the first pairwise contrast's
+# unadjusted p-value. Stack the B values and Kolmogorov–Smirnov-test
+# against U[0, 1].
+#
+# Pass criterion: KS D < 0.025 (the asymptotic 99% critical value at
+# B = 5_000 is ~0.023) AND the empirical mean is within 3 standard
+# errors of 0.5 (sqrt(1/12/B) = 0.0041, so 0.5 ± 0.012).
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from scipy.stats import kstest
+from pymmeans import emmeans, pairs
+
+_rng_uniform = np.random.default_rng(20260530)
+_B_uniform   = 5_000
+_n_per_uniform = 15
+_k_uniform   = 4
+_groups_uniform = np.repeat(list("ABCD"), _n_per_uniform)
+
+p_first = np.empty(_B_uniform)
+for _i in range(_B_uniform):
+    _y = _rng_uniform.standard_normal(_k_uniform * _n_per_uniform)
+    _fit = smf.ols(
+        "y ~ C(g)",
+        pd.DataFrame({"g": _groups_uniform, "y": _y})
+    ).fit()
+    _ct = pairs(emmeans(_fit, "g"), adjust="none")
+    p_first[_i] = float(_ct.frame["p_value"].iloc[0])
+
+ks_D, ks_p = kstest(p_first, "uniform")
+mean_p = float(p_first.mean())
+mean_tol = 3 * np.sqrt(1 / 12 / _B_uniform)
+
+print(
+    f"  B = {_B_uniform}, n_per = {_n_per_uniform}, k = {_k_uniform}, "
+    f"df_resid = {_k_uniform * _n_per_uniform - _k_uniform}"
+)
+print(f"  empirical mean p = {mean_p:.4f}  (expected 0.500 ± {mean_tol:.4f})")
+print(f"  KS D = {ks_D:.4f}  (asymptotic 99% crit ≈ 0.0231 at B = 5_000)")
+print(f"  KS p = {ks_p:.4f}")
+
+check("XIII.1", "pairs() p-value uniformity under H0 (KS D)",
+      float(ks_D), 0.025, "Monte Carlo")
+check("XIII.1", "pairs() p-value mean under H0 |mean - 0.5|",
+      abs(mean_p - 0.5), mean_tol, "Monte Carlo")
+""")
+
+# --- §XIII.2 — FWER control across multiplicity adjustments.
+code(r"""
+# §XIII.2 — FWER control across six multiplicity adjustments.
+#
+# Under the global null ``H_0: mu_A = mu_B = mu_C = mu_D``, a valid
+# family-wise procedure at nominal alpha must satisfy
+# ``P(reject any null) <= alpha`` over independent replications.
+# When all nulls are true, FDR (which BH controls) collapses to FWER,
+# so BH is included alongside the five FWER procedures.
+#
+# Protocol. B = 5_000 replications; balanced 4-group OLS with n = 15
+# per group (df_resid = 56). On each replication we simulate y from
+# N(0, 1), fit ``y ~ C(g)``, take both the full pairwise contrast
+# family (k * (k - 1) / 2 = 6 contrasts) and the trt-vs-ctrl family
+# (k - 1 = 3 contrasts), apply each multiplicity adjustment, and
+# count the replication as a family-wise rejection if min(p_adj) <
+# alpha = 0.05.
+#
+# Pass criterion: empirical FWER must lie within
+# alpha +/- 2 * sqrt(alpha * (1 - alpha) / B) of the nominal level.
+# At B = 5_000 and alpha = 0.05 that band is [0.0438, 0.0562]; for
+# a conservative procedure the empirical FWER can be anywhere below
+# the upper edge so the check is ``empirical <= alpha + 2 * MC_SE``.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import adjust_pvalues, contrast, emmeans, pairs
+
+_rng_fwer = np.random.default_rng(20260601)
+_B_fwer   = 5_000
+_k_fwer   = 4
+_n_per_fwer = 15
+_alpha    = 0.05
+_groups_fwer = np.repeat(list("ABCD"), _n_per_fwer)
+
+_methods_fwer = ["bonferroni", "sidak", "holm", "tukey", "bh", "dunnett"]
+_reject_count = {m: 0 for m in _methods_fwer}
+
+for _i in range(_B_fwer):
+    _y = _rng_fwer.standard_normal(_k_fwer * _n_per_fwer)
+    _df_rep = pd.DataFrame({"g": _groups_fwer, "y": _y})
+    _fit = smf.ols("y ~ C(g)", _df_rep).fit()
+    _em = emmeans(_fit, "g")
+
+    _pw = pairs(_em, adjust="none")
+    _p_raw = _pw.frame["p_value"].to_numpy()
+    _t_raw = _pw.frame["t_ratio"].to_numpy()
+    _df_resid = float(_pw.frame["df"].iloc[0])
+
+    for _m in ("bonferroni", "sidak", "holm", "bh"):
+        if float(np.min(adjust_pvalues(_p_raw, _m))) < _alpha:
+            _reject_count[_m] += 1
+
+    _adj_tukey = adjust_pvalues(
+        _p_raw, "tukey",
+        t_ratios=_t_raw, n_means=_k_fwer, df=_df_resid,
+    )
+    if float(np.min(_adj_tukey)) < _alpha:
+        _reject_count["tukey"] += 1
+
+    _ct = contrast(_em, method="trt.vs.ctrl", adjust="dunnett")
+    if float(np.min(_ct.frame["p_value"])) < _alpha:
+        _reject_count["dunnett"] += 1
+
+_mc_se = float(np.sqrt(_alpha * (1 - _alpha) / _B_fwer))
+_fwer_bound = _alpha + 2 * _mc_se
+
+print(f"  B = {_B_fwer}, k = {_k_fwer}, n_per = {_n_per_fwer}, alpha = {_alpha}")
+print(f"  pass criterion: empirical FWER <= alpha + 2 * MC SE = {_fwer_bound:.4f}")
+print()
+print(f"  {'method':<12s} {'FWER':>8s}  {'+/-':>14s}")
+for _m in _methods_fwer:
+    _fwer = _reject_count[_m] / _B_fwer
+    print(
+        f"  {_m:<12s} {_fwer:>8.4f}  "
+        f"[{max(0.0, _fwer - 2 * _mc_se):.4f}, {_fwer + 2 * _mc_se:.4f}]"
+    )
+
+for _m in _methods_fwer:
+    _fwer = _reject_count[_m] / _B_fwer
+    check(
+        "XIII.2", f"FWER control under H0 — {_m}",
+        max(0.0, _fwer - _alpha),  # excess over nominal
+        2 * _mc_se,
+        "Monte Carlo",
+    )
+""")
+
+# --- §XIII.3 — CI coverage probability at three nominal levels.
+code(r"""
+# §XIII.3 — CI coverage probability under H_0.
+#
+# For each cell ``j``, the Wald / t-pivot CI returned by
+# ``summary(emm, level=L)`` should cover the true cell mean with
+# probability L. Under H_0 (all means equal to 0), the true cell
+# mean is 0 for every cell, so we can count the fraction of CIs that
+# contain 0 and compare to L.
+#
+# Protocol. B = 5_000 replications; balanced 4-group OLS with n = 15
+# per group. On each replication we fit ``y ~ C(g)`` with simulated
+# y ~ N(0, 1) and call ``summary(em, level=L)`` for
+# L in {0.80, 0.95, 0.99}. Per (replication, cell) we record whether
+# the CI contains 0. The k = 4 cells share df_resid but not the
+# centroid noise, so each is a valid marginal coverage observation.
+# That gives k * B = 20_000 marginal CIs per level.
+#
+# Pass criterion: ``|empirical - nominal| <= 3 * MC SE``. The
+# 3-sigma band is the standard process-control acceptance threshold —
+# at 99.7% acceptance for true-coverage-equals-nominal, it tolerates
+# normal Monte Carlo fluctuation while still flagging a systematic
+# bias of >= 3 MC SE. Tighter bands (2 sigma) would false-alarm at a
+# ~5% rate on re-runs with different seeds; looser bands (4+ sigma)
+# would miss real bias.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, summary
+
+_rng_cov = np.random.default_rng(20260605)
+_B_cov   = 5_000
+_k_cov   = 4
+_n_per_cov = 15
+_groups_cov = np.repeat(list("ABCD"), _n_per_cov)
+_LEVELS = (0.80, 0.95, 0.99)
+_cover_count = {L: 0 for L in _LEVELS}
+
+for _i in range(_B_cov):
+    _y = _rng_cov.standard_normal(_k_cov * _n_per_cov)
+    _df_rep = pd.DataFrame({"g": _groups_cov, "y": _y})
+    _fit = smf.ols("y ~ C(g)", _df_rep).fit()
+    _em = emmeans(_fit, "g")
+    for _L in _LEVELS:
+        _s = summary(_em, level=_L, infer=(True, False))
+        _lo = _s["lower_cl"].to_numpy()
+        _hi = _s["upper_cl"].to_numpy()
+        _cover_count[_L] += int(np.sum((_lo <= 0) & (0 <= _hi)))
+
+_n_obs = _k_cov * _B_cov
+print(f"  B = {_B_cov}, k = {_k_cov}, n_per = {_n_per_cov}, "
+      f"total CIs per level = {_n_obs}")
+print()
+print(f"  {'level':>6s}  {'coverage':>9s}  {'3 MC SE':>9s}  "
+      f"{'expected band':>22s}")
+for _L in _LEVELS:
+    _emp = _cover_count[_L] / _n_obs
+    _mc = float(np.sqrt(_L * (1 - _L) / _n_obs))
+    print(
+        f"  {_L:>5.2f}  {_emp:>9.4f}  {3*_mc:>9.4f}  "
+        f"  [{_L - 3*_mc:.4f}, {_L + 3*_mc:.4f}]"
+    )
+
+for _L in _LEVELS:
+    _emp = _cover_count[_L] / _n_obs
+    _mc = float(np.sqrt(_L * (1 - _L) / _n_obs))
+    check(
+        "XIII.3", f"CI coverage probability — level {_L:.2f}",
+        abs(_emp - _L), 3 * _mc, "Monte Carlo",
+    )
+""")
+
+# --- §XIII.4 — Power calibration under H₁.
+code(r"""
+# §XIII.4 — Empirical power matches the closed-form noncentral t.
+#
+# Under H_1 with a known mean shift Δ on one group, the pairwise
+# t-statistic for the shifted-vs-control contrast has a *noncentral*
+# t-distribution with df = df_resid and noncentrality
+#
+#     λ = Δ / sqrt(σ² · 2 / n_per)
+#
+# (Casella & Berger 2002 §11.3). For σ = 1, n_per = 15, Δ = 1
+# the noncentrality is sqrt(15 / 2) ≈ 2.7386 and df_resid = 56.
+# The two-sided power at α = 0.05 is then
+#
+#     power = P(|T_nc(df, λ)| > t_crit)
+#           = nct.sf(t_crit, df, λ) + nct.cdf(-t_crit, df, λ)
+#
+# This is the textbook reference; the empirical power from B = 5_000
+# fits where one group has its mean shifted by Δ must match it
+# within ±3 Monte Carlo SE.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from scipy.stats import nct, t as tdist
+from pymmeans import emmeans, pairs
+
+_B_pow   = 5_000
+_k_pow   = 4
+_n_per_pow = 15
+_alpha_pow = 0.05
+_delta_pow = 1.0
+_sigma_pow = 1.0
+
+_df_resid = _k_pow * _n_per_pow - _k_pow
+_se_true  = _sigma_pow * np.sqrt(2.0 / _n_per_pow)
+_ncp      = _delta_pow / _se_true
+_t_crit   = float(tdist.ppf(1 - _alpha_pow / 2, _df_resid))
+_power_theory = float(
+    nct.sf(_t_crit, _df_resid, _ncp) + nct.cdf(-_t_crit, _df_resid, _ncp)
+)
+
+_rng_pow = np.random.default_rng(20260606)
+_groups_pow = np.repeat(list("ABCD"), _n_per_pow)
+# Shift group B by Δ; the alphabetical contrast label pymmeans
+# emits is "A - B" (mean_A - mean_B), which is -Δ on average — the
+# two-sided test of |t| > t_crit is sign-invariant.
+_shift = np.array([_delta_pow if g == "B" else 0.0 for g in _groups_pow])
+
+_reject = 0
+for _i in range(_B_pow):
+    _y = _shift + _sigma_pow * _rng_pow.standard_normal(_k_pow * _n_per_pow)
+    _fit = smf.ols(
+        "y ~ C(g)",
+        pd.DataFrame({"g": _groups_pow, "y": _y}),
+    ).fit()
+    _em = emmeans(_fit, "g")
+    _pw = pairs(_em, adjust="none")
+    _idx = _pw.frame["contrast"].tolist().index("A - B")
+    if float(_pw.frame["p_value"].iloc[_idx]) < _alpha_pow:
+        _reject += 1
+
+_power_emp = _reject / _B_pow
+_mc_se_pow = float(np.sqrt(_power_theory * (1 - _power_theory) / _B_pow))
+
+print(f"  df_resid = {_df_resid}, ncp = {_ncp:.4f}, t_crit = {_t_crit:.4f}")
+print(f"  theoretical power (noncentral t) = {_power_theory:.4f}")
+print(f"  empirical power                  = {_power_emp:.4f}  "
+      f"({_reject} / {_B_pow})")
+print(f"  |empirical - theoretical|        = {abs(_power_emp - _power_theory):.4f}")
+print(f"  3 * MC SE                        = {3 * _mc_se_pow:.4f}")
+
+check("XIII.4", "empirical power vs noncentral-t closed form",
+      abs(_power_emp - _power_theory), 3 * _mc_se_pow, "Monte Carlo")
+""")
+
+# --- §XIII.5 — Phipson-Smyth (b+1)/(m+1) permutation correction.
+code(r"""
+# §XIII.5 — Phipson-Smyth (b+1)/(m+1) permutation correction.
+#
+# The naive permutation p-value ``b / m`` (b = count of permuted
+# statistics at least as extreme as observed; m = permutations run)
+# can return p = 0 when the observed statistic is more extreme than
+# all m permutations. That answer is statistically indefensible:
+# the data only constrain the true p to be ``< 1 / (m + 1)``; zero
+# is the wrong reported value. Phipson & Smyth (2010) show that the
+# unbiased Monte Carlo estimator is
+#
+#     p = (b + 1) / (m + 1)
+#
+# which has a strict floor at ``1 / (m + 1)`` and matches the exact
+# permutation distribution when the full enumeration is feasible.
+# pymmeans's ``permutation_test`` implements this directly
+# (source: ``summary.py`` ``p_perm = (perm_extreme + 1) / (n_valid + 1)``).
+#
+# This cell verifies three structural properties that follow from
+# the formula:
+#
+#  1. **Discrete codomain.** Every returned p-value must be in the
+#     set ``{ (k + 1) / (m + 1) : k = 0, 1, ..., m }`` — m + 1
+#     distinct values.
+#  2. **Floor.** The minimum reachable p-value is ``1 / (m + 1)``,
+#     not 0.
+#  3. **Inverse-formula integer recovery.** ``(m + 1) * p - 1`` must
+#     equal a non-negative integer in ``[0, m]`` — the original
+#     ``b`` count, recoverable from the rounded p-value.
+#
+# We use B = 99 permutations so the +1 correction is decision-
+# relevant: at this scale ``1 / 100 = 0.01`` is the minimum p, vs.
+# the naive 0 / 99 = 0.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import contrast, emmeans, permutation_test
+
+_B_ps = 99
+_rng_ps = np.random.default_rng(20260607)
+_groups_ps = np.repeat(list("ABCD"), 10)
+_y_ps = (
+    _rng_ps.standard_normal(40)
+    + np.where(_groups_ps == "B", 2.0, 0.0)
+)
+_df_ps = pd.DataFrame({"g": _groups_ps, "y": _y_ps})
+_fit_ps = smf.ols("y ~ C(g)", _df_ps).fit()
+_em_ps  = emmeans(_fit_ps, "g")
+_ct_ps  = contrast(_em_ps, method="pairwise", adjust="none")
+_pt = permutation_test(_ct_ps, n_permutations=_B_ps, seed=2026)
+_p_perm = _pt["p_permutation"].to_numpy()
+
+print("  permutation_test output (B = 99):")
+print(_pt[["contrast", "t_ratio", "p_value", "p_permutation"]].to_string(index=False))
+print()
+
+# Property 1: every p-value in the discrete (k+1)/(B+1) set.
+_valid_set = {(k + 1) / (_B_ps + 1) for k in range(_B_ps + 1)}
+_max_set_err = max(
+    min(abs(v - s) for s in _valid_set) for v in _p_perm
+)
+print(f"  max distance from discrete set: {_max_set_err:.2e}  (expect 0)")
+
+# Property 2: floor 1/(B+1).
+_floor = 1.0 / (_B_ps + 1)
+_min_p = float(_p_perm.min())
+print(f"  Phipson-Smyth floor 1/(B+1) = {_floor:.6f}")
+print(f"  observed min p_permutation  = {_min_p:.6f}")
+
+# Property 3: recover the integer b count from p.
+_b_recovered = np.round((_B_ps + 1) * _p_perm - 1).astype(int)
+_rounding_err = float(np.max(np.abs((_B_ps + 1) * _p_perm - 1 - _b_recovered)))
+print(f"  recovered extreme counts b: {_b_recovered.tolist()}")
+print(f"  rounding error on (B+1)*p - 1: {_rounding_err:.2e}  (expect ~ 0)")
+print(f"  all b in [0, B]?  {bool(np.all((_b_recovered >= 0) & (_b_recovered <= _B_ps)))}")
+
+check("XIII.5", "Phipson-Smyth discrete-set membership",
+      _max_set_err, 1e-12, "structural")
+check("XIII.5", "Phipson-Smyth floor 1/(B+1)",
+      max(0.0, _floor - _min_p), 1e-12, "structural")
+check("XIII.5", "Phipson-Smyth (B+1)*p - 1 integer recovery",
+      _rounding_err, 1e-9, "structural")
+""")
+
+# ================================================================== §XIV
+md(r"""
+# Section XIV — Validation scorecard
 """)
 
 code(r"""
