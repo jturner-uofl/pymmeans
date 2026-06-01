@@ -4625,7 +4625,235 @@ check("XVIII.5",
 
 # ================================================================== §XIX
 md(r"""
-# Section XIX — Validation scorecard
+# Section XIX — Sensitivity + multiple-imputation pooling
+
+This section verifies the **two new public functions introduced in
+this release** of pymmeans:
+
+* **`pymmeans.e_value`** — the VanderWeele-Ding (2017) E-value, a
+  sensitivity-analysis statistic that asks: *how strong would an
+  unmeasured confounder need to be to nullify the observed effect?*
+  Closed-form on the risk-ratio scale, with documented conversions
+  for odds-ratios, hazard-ratios, and standardised-mean-differences
+  per Mathur et al. (2018).
+* **`pymmeans.pool_imputed`** — Rubin's-rules pooling for
+  multiply-imputed pymmeans output, with the **Barnard-Rubin (1999)**
+  small-sample df correction. Accepts a list of M EMMResult or
+  ContrastResult objects (one per imputation) and returns a single
+  pooled result with the correct total variance and degrees of
+  freedom.
+
+Both are *standalone novel features* in the sense that R `emmeans`
+itself implements neither — sensitivity analysis is done via the
+`EValue` R package and MI pooling via `mice::pool`, but neither is
+integrated with `emmeans` output. Pymmeans's API integration is
+the contribution.
+
+The cells below verify both at the same level of rigour as the rest
+of the notebook: published-value reproduction for E-value, and a
+fixed-seed simulation with known-MAR truth + Rubin closed-form
+checks for `pool_imputed`.
+""")
+
+# --- §XIX.1 — E-value on the RHC adjusted log-OR.
+code(r"""
+# §XIX.1 — E-value sensitivity on the §XV RHC adjusted log-OR.
+#
+# §XV.2 found that the adjusted Connors-1996 log-OR for RHC vs no-RHC
+# was approximately log(1.30) = 0.262, i.e. OR ≈ 1.30 (95% CI
+# [1.137, 1.487]). The E-value asks: how strong an unmeasured
+# confounder would have been needed (associated with BOTH treatment
+# and outcome by a risk ratio of at least E) to fully nullify that
+# observed association?
+
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, contrast, e_value
+
+# Recompute the §XV log-OR + CI under the standard logistic GLM.
+_rhc = pd.read_csv(REF / "rhc_connors1996.csv")
+_covs_num = ["age", "edu", "aps1", "scoma1", "meanbp1", "hrt1", "resp1",
+             "temp1", "wblc1", "hema1", "sod1", "pot1", "crea1"]
+_hx_cols = ["cardiohx", "chfhx", "dementhx", "psychhx", "chrpulhx",
+            "renalhx", "liverhx", "gibledhx", "malighx", "immunhx",
+            "transhx", "amihx"]
+_glm_rhc = smf.glm(
+    "dth30_yes ~ C(treat) + sex_F + " + " + ".join(_covs_num + _hx_cols)
+    + " + C(cat1) + C(race)",
+    data=_rhc, family=sm.families.Binomial(),
+).fit()
+_em_rhc = emmeans(_glm_rhc, specs=["treat"])
+_ct_rhc = contrast(_em_rhc, method="trt.vs.ctrl", ref=0)
+_log_or  = float(_ct_rhc.frame["estimate"].iloc[0])
+_se_lor  = float(_ct_rhc.frame["SE"].iloc[0])
+_OR_pt   = float(np.exp(_log_or))
+_OR_lo   = float(np.exp(_log_or - 1.96 * _se_lor))
+_OR_hi   = float(np.exp(_log_or + 1.96 * _se_lor))
+print(f"  RHC OR (response scale): {_OR_pt:.4f}   95% CI [{_OR_lo:.4f}, {_OR_hi:.4f}]")
+
+# The outcome (30-day mortality) is ~33% prevalent, so the OR ≈ RR
+# rare-outcome approximation is questionable; use the common-event
+# OR→RR conversion (kind="or", prevalence=0.33).
+_prev = float(_rhc["dth30_yes"].mean())
+print(f"  outcome prevalence: {_prev:.3f}")
+
+_ev_rare = e_value(_OR_pt, ci_lo=_OR_lo, ci_hi=_OR_hi, kind="or")
+_ev_comm = e_value(_OR_pt, ci_lo=_OR_lo, ci_hi=_OR_hi, kind="or",
+                   prevalence=_prev)
+print(f"\n  E-value under rare-outcome OR≈RR approximation:")
+print(f"    e_point = {_ev_rare.e_point:.3f}")
+print(f"    e_ci    = {_ev_rare.e_ci:.3f}")
+print(f"\n  E-value under common-event OR→sqrt(OR) conversion (prevalence={_prev:.3f}):")
+print(f"    e_point = {_ev_comm.e_point:.3f}")
+print(f"    e_ci    = {_ev_comm.e_ci:.3f}")
+
+# Independent closed-form check for the rare-event branch.
+_e_point_manual = _OR_pt + np.sqrt(_OR_pt * (_OR_pt - 1.0))
+_e_ci_manual    = _OR_lo + np.sqrt(_OR_lo * (_OR_lo - 1.0))
+print(f"\n  closed-form |Δ| vs implementation:")
+print(f"    e_point: {abs(_ev_rare.e_point - _e_point_manual):.2e}")
+print(f"    e_ci:    {abs(_ev_rare.e_ci - _e_ci_manual):.2e}")
+
+# Independent reproduction of the VanderWeele-Ding 2017 SMOKING example
+# (their canonical worked example): RR=10.73 → published E ≈ 20.95.
+_ev_smoking = e_value(10.73, kind="rr")
+print(f"\n  VanderWeele-Ding 2017 smoking example: RR=10.73")
+print(f"    pymmeans  E={_ev_smoking.e_point:.3f}   published ≈ 20.95")
+print(f"    |Δ|: {abs(_ev_smoking.e_point - 20.95):.3f}")
+
+# Contracts.
+check("XIX.1", "E-value reproduces VanderWeele-Ding 2017 smoking RR=10.73",
+      abs(_ev_smoking.e_point - 20.95), 0.01, "published")
+check("XIX.2", "E-value point estimate matches closed-form on RHC OR",
+      abs(_ev_rare.e_point - _e_point_manual), 1e-12, "structural")
+check("XIX.3", "E-value CI bound matches closed-form on RHC OR lower",
+      abs(_ev_rare.e_ci - _e_ci_manual), 1e-12, "structural")
+""")
+
+# --- §XIX.2 — Rubin's rules MI pooling on a known-truth MAR simulation.
+md(r"""
+## XIX.2 — Multiple-imputation pooling (Rubin 1987 + Barnard-Rubin 1999)
+
+The cell below simulates a missing-at-random (MAR) scenario, runs
+**M = 10 stochastic-regression imputations**, fits the same
+regression-adjusted ATE on each imputed dataset, and pools the M
+results via `pymmeans.pool_imputed`. The contracts verify:
+
+* The pooled estimate is approximately unbiased for the known true
+  ATE (within a small multiple of the pooled SE).
+* The Rubin total-variance identity `T = Ū + (1 + 1/M) · B` holds at
+  numerical machine precision against a hand-computed reference.
+* The fraction of missing information (FMI) is positive and below 1
+  (a structural sanity check).
+* When all M imputations produce *identical* estimates, the pooled
+  SE collapses to the (common) within-imputation SE (the
+  zero-between-variance limit).
+""")
+
+code(r"""
+# §XIX.2 — Rubin's rules: simulate M=10 imputations + verify the pooled SE.
+
+from pymmeans import pool_imputed
+
+_rng_mi = np.random.default_rng(20260601)
+_n_mi   = 500
+_true_ate_mi = 1.5
+
+# Complete data.
+_df_full = pd.DataFrame({
+    "treat": pd.Categorical(_rng_mi.integers(0, 2, _n_mi)),
+    "x":     _rng_mi.standard_normal(_n_mi),
+})
+_df_full["y"] = (
+    _df_full["treat"].astype(int) * _true_ate_mi
+    + 0.3 * _df_full["x"]
+    + _rng_mi.standard_normal(_n_mi)
+)
+
+# Introduce MAR missingness in y depending on x (logistic model).
+_p_miss = 1.0 / (1.0 + np.exp(-(0.5 * _df_full["x"] - 1.5)))  # ~10-20% missing
+_miss_mask = _rng_mi.random(_n_mi) < _p_miss
+_df_obs = _df_full.copy()
+_df_obs.loc[_miss_mask, "y"] = np.nan
+print(f"  total n = {_n_mi}, missing y = {_miss_mask.sum()}"
+      f" ({_miss_mask.mean()*100:.1f}%)")
+
+# M imputations via stochastic regression (Bayesian linear regression with
+# fixed posterior-predictive draw).
+_M = 10
+_ct_imputed = []
+for _m in range(_M):
+    _d_imp = _df_obs.copy()
+    _fit_imp = smf.ols("y ~ treat + x", _df_obs.dropna()).fit()
+    _pred = _fit_imp.predict(_d_imp)
+    _resid_sd = float(_fit_imp.scale) ** 0.5
+    _d_imp.loc[_miss_mask, "y"] = (
+        _pred[_miss_mask].to_numpy()
+        + _rng_mi.standard_normal(_miss_mask.sum()) * _resid_sd
+    )
+    _fit_m = smf.ols("y ~ treat + x", _d_imp).fit()
+    _em_m  = emmeans(_fit_m, "treat")
+    _ct_imputed.append(
+        contrast(_em_m, method="trt.vs.ctrl", ref=0)
+    )
+
+_pooled = pool_imputed(_ct_imputed)
+_est = float(_pooled.frame["estimate"].iloc[0])
+_se  = float(_pooled.frame["SE"].iloc[0])
+_df  = float(_pooled.frame["df"].iloc[0])
+_lo  = float(_pooled.frame["lower_cl"].iloc[0])
+_hi  = float(_pooled.frame["upper_cl"].iloc[0])
+_fmi = float(_pooled.fmi[0])
+_riv = float(_pooled.relative_increase[0])
+print(f"\n  pooled estimate (true ATE = {_true_ate_mi}):  {_est:.4f}")
+print(f"  pooled SE:                  {_se:.4f}")
+print(f"  Barnard-Rubin df:           {_df:.1f}")
+print(f"  95% CI:                     [{_lo:.4f}, {_hi:.4f}]")
+print(f"  contains truth?             {bool(_lo <= _true_ate_mi <= _hi)}")
+print(f"  fraction of missing info:   {_fmi:.4f}")
+print(f"  relative increase (r):      {_riv:.4f}")
+
+# Closed-form re-derivation of T = U_bar + (1+1/M)·B.
+_pts_h = np.array([float(c.frame["estimate"].iloc[0]) for c in _ct_imputed])
+_ses_h = np.array([float(c.frame["SE"].iloc[0])       for c in _ct_imputed])
+_theta_bar_h = _pts_h.mean()
+_U_bar_h     = (_ses_h ** 2).mean()
+_B_h         = ((_pts_h - _theta_bar_h) ** 2).sum() / (_M - 1)
+_T_h         = _U_bar_h + (1.0 + 1.0 / _M) * _B_h
+_SE_h        = np.sqrt(_T_h)
+print(f"\n  Rubin total-variance identity check:")
+print(f"    pkg pooled SE:                  {_se:.10f}")
+print(f"    hand-computed sqrt(U+(1+1/M)·B): {_SE_h:.10f}")
+print(f"    |Δ|:                            {abs(_se - _SE_h):.2e}")
+
+# Zero-between-variance structural check.
+from dataclasses import replace as _dc_replace
+_forced_identical = [
+    _dc_replace(_c, frame=_ct_imputed[0].frame.copy()) for _c in _ct_imputed
+]
+_pooled_id = pool_imputed(_forced_identical)
+_se_id = float(_pooled_id.frame["SE"].iloc[0])
+_se_within = float(_ct_imputed[0].frame["SE"].iloc[0])
+print(f"\n  zero-between-variance limit (all M imputations identical):")
+print(f"    pooled SE: {_se_id:.10f}   within-imp SE: {_se_within:.10f}"
+      f"   |Δ|: {abs(_se_id - _se_within):.2e}")
+
+# Contracts.
+check("XIX.4", "pool_imputed: 95% CI contains true ATE under MAR + 10 imputations",
+      0.0 if (_lo <= _true_ate_mi <= _hi) else 1.0, 0.0, "applied")
+check("XIX.5", "pool_imputed: Rubin total-variance identity holds at machine precision",
+      abs(_se - _SE_h), 1e-12, "structural")
+check("XIX.6", "pool_imputed: zero-between-variance limit equals within-imp SE",
+      abs(_se_id - _se_within), 1e-12, "structural")
+check("XIX.7", "pool_imputed: FMI in [0, 1]",
+      max(0.0, max(-_fmi, _fmi - 1.0)), 0.0, "structural")
+""")
+
+# ================================================================== §XX
+md(r"""
+# Section XX — Validation scorecard
 """)
 
 code(r"""

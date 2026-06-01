@@ -29,6 +29,7 @@ from pymmeans.grid_ops import (
     permute_levels,
     split_fac,
 )
+from pymmeans.imputation import PooledImputationResult, pool_imputed
 from pymmeans.joint import eta_squared, joint_tests
 from pymmeans.ml import (
     MLEMMResult,
@@ -80,6 +81,7 @@ from pymmeans.satterthwaite import (
     kenward_roger_vcov,
     satterthwaite_df,
 )
+from pymmeans.sensitivity import EValueResult, e_value
 from pymmeans.summary import bootstrap_ci, permutation_test
 from pymmeans.summary_layer import (
     as_r_frame,
@@ -132,7 +134,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.2.11"
+__version__ = "0.3.0"
 
 __all__ = [
     "CONTRAST_METHODS",
@@ -141,6 +143,7 @@ __all__ = [
     "Check",
     "ContrastResult",
     "EMMResult",
+    "EValueResult",
     "EmmList",
     "FtestResult",
     "HealthReport",
@@ -153,6 +156,7 @@ __all__ = [
     "MultivariateInfo",
     "NonLogContrastBiasAdjustError",
     "PBmodcompResult",
+    "PooledImputationResult",
     "PosteriorInfo",
     "RefGrid",
     "StatsmodelsAdapter",
@@ -172,6 +176,7 @@ __all__ = [
     "ddf_lb",
     "design_corrected_vcov",
     "detect_transform",
+    "e_value",
     "effect_size",
     "emm_options",
     "emmeans",
@@ -216,6 +221,7 @@ __all__ = [
     "permutation_test",
     "permute_levels",
     "plot",
+    "pool_imputed",
     "posterior_emm_summary",
     "posterior_emmeans",
     "pwpm",

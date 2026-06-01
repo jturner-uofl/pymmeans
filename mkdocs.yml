@@ -89,6 +89,8 @@ nav:
       - grid_ops (add_grouping / comb_facs / split_fac / permute_levels): api/grid_ops.md
       - diagnostics (health_check): api/diagnostics.md
       - survey (design-corrected vcov): api/survey.md
+      - sensitivity (VanderWeele-Ding E-value): api/sensitivity.md
+      - imputation (Rubin's rules pooling): api/imputation.md
   - vs R emmeans:
       - Performance: PERFORMANCE_REPORT.md
       - Validation: vs-r.md
