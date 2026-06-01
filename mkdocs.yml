@@ -92,6 +92,7 @@ nav:
       - sensitivity (VanderWeele-Ding E-value): api/sensitivity.md
       - imputation (Rubin's rules pooling): api/imputation.md
       - conformal (split + Lei-Candès counterfactual PIs): api/conformal.md
+      - double_ml (cross-fit + AIPW double-robust ATE): api/double_ml.md
   - vs R emmeans:
       - Performance: PERFORMANCE_REPORT.md
       - Validation: vs-r.md

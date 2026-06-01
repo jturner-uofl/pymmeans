@@ -4,13 +4,13 @@ Estimated marginal means (EMMs) for Python — a native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) package, with no R
 dependency.
 
-> Status: **Beta** (v0.4.0). API stable across the OLS / GLM / MixedLM /
+> Status: **Beta** (v0.5.0). API stable across the OLS / GLM / MixedLM /
 > GEE / Cox / Beta surface; 90/100 strict parity with R `emmeans` (94/100
 > if partially-supported items count — see
 > [docs/r_parity_matrix.md](https://github.com/jturner-uofl/pymmeans/blob/main/docs/r_parity_matrix.md))
 > validated against `tests/r_reference/` CSVs at `atol=1e-4` (and tighter —
 > see [vs-r.md](https://github.com/jturner-uofl/pymmeans/blob/main/docs/vs-r.md)).
-> 414 unit tests on the public surface (`pytest`), 87% line coverage.
+> 429 unit tests on the public surface (`pytest`), 87% line coverage.
 > Minor API polish still possible; the numerical surface is frozen.
 
 ## Install

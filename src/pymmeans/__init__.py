@@ -27,6 +27,7 @@ from pymmeans.contrasts import (
     register_contrast_method,
 )
 from pymmeans.diagnostics import Check, HealthReport, health_check
+from pymmeans.double_ml import AIPWResult, aipw_ate, cross_fit_ml_emmeans
 from pymmeans.emmeans import EMMResult, emmeans
 from pymmeans.grid_ops import (
     add_grouping,
@@ -140,11 +141,12 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "CONTRAST_METHODS",
     "TRANSFORMS",
+    "AIPWResult",
     "BoundaryFitError",
     "Check",
     "ConformalCounterfactualResult",
@@ -173,6 +175,7 @@ __all__ = [
     "__version__",
     "add_grouping",
     "adjust_pvalues",
+    "aipw_ate",
     "apply_kenward_roger",
     "apply_satterthwaite",
     "as_r_frame",
@@ -182,6 +185,7 @@ __all__ = [
     "confint",
     "conformal_counterfactual_pi",
     "contrast",
+    "cross_fit_ml_emmeans",
     "ddf_lb",
     "design_corrected_vcov",
     "detect_transform",
