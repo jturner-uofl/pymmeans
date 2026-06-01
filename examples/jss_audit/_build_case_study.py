@@ -4104,7 +4104,369 @@ check("XVII.5",
 
 # ================================================================== §XVIII
 md(r"""
-# Section XVIII — Validation scorecard
+# Section XVIII — Performance benchmarks vs R `emmeans`
+
+Sections I–XIII established that pymmeans produces the **same
+numbers** as R `emmeans` to the documented precision floor on the
+deterministic surface, and §§XIV–XVII established that those
+numbers reproduce published findings on four canonical archival
+datasets. This section closes the third axis a JSS reviewer
+typically asks about: **is it competitively fast?**
+
+We benchmark **six representative workloads** spanning the most-
+used pymmeans / `emmeans` code paths. For each workload, both
+implementations operate on the **same dataset** (the CSV files
+generated here, read by both sides), run a single complete
+"fit + emmeans + contrast" pipeline, and report median wall-clock
+across multiple repetitions.
+
+| # | Workload | Why it's in the suite |
+|:--:|---|---|
+| W1 | OLS + pairs (n=10,000, 4-level factor)         | The bread-and-butter operation. Most-used emmeans call. |
+| W2 | OLS pairs with `adjust="mvt"` (5-level factor) | Multivariate-t QMC adjustment — the slowest internal code path. |
+| W3 | Binomial GLM + pairs (n=5,000)                 | Tests the GLM-IRLS path + emmeans cov_params propagation. |
+| W4 | MixedLM + Kenward-Roger df (n=2,000, 50 subj)  | The KR-df pathway — historically the slowest emmeans step. |
+| W5 | Cox PH + pairs (n=5,000)                       | Tests the survival / partial-likelihood path. |
+| W6 | `emtrends` (n=5,000)                           | Tests the marginal-slopes path. |
+
+*Methodology.* On the pymmeans side, the harness uses
+``time.perf_counter`` (an OS-level monotonic clock) and reports the
+**median** of multiple repetitions after one warm-up run. On the R
+side, the harness uses ``proc.time()[["elapsed"]]`` (same OS-level
+clock) and reports the same median-of-reps statistic. Workloads
+W1, W3, W5, W6 use 5 reps; the slower W2 and W4 use 3 reps.
+
+*Caveats.* (a) R's `proc.time()` has 1-millisecond resolution, so
+sub-millisecond workloads are not reliably measured on the R side
+(none of W1–W6 falls below that floor). (b) Memory benchmarking is
+intentionally omitted — Python and R have different interpreter
+overheads that make peak-RSS comparisons unhelpful for the question
+"is the operation efficient?". The interested reader can extract
+per-operation memory via `tracemalloc` (Python) and
+`gc.mem.maxused` (R). (c) These are *single-machine* benchmarks on
+the build host; the published number a paper will cite should be
+the *median across replicate runs and across machines*. The
+absolute timings are reported, but the **head-to-head ratio is the
+robust comparison** — both sides share any hardware-level
+variability.
+""")
+
+# --- §XVIII.1 — Generate fixed-seed benchmark datasets.
+code(r"""
+# §XVIII.1 — Generate the six benchmark datasets at fixed seeds, save
+# to a benchmark scratch directory that both pymmeans and R will read.
+
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import statsmodels.duration.hazard_regression as _hr
+import statsmodels.regression.mixed_linear_model as _mlm
+from pymmeans import emmeans, pairs, emtrends
+from pymmeans.satterthwaite import apply_kenward_roger
+
+_BENCH_DIR = Path("/tmp/pymmeans_bench")
+_BENCH_DIR.mkdir(exist_ok=True)
+
+_rng_b = np.random.default_rng(20260601)
+
+# W1: OLS + pairs (n=10k, 4-level factor).
+_n1 = 10_000
+_d1 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABCD"), _n1)),
+    "x": _rng_b.standard_normal(_n1),
+})
+_offs1 = {"A": 0.0, "B": 0.3, "C": 0.6, "D": 0.9}
+_d1["y"] = _rng_b.standard_normal(_n1) + _d1["g"].map(_offs1).astype(float)
+_d1.to_csv(_BENCH_DIR / "bench_ols.csv", index=False)
+
+# W2: OLS pairs mvt (n≈1.2k, 5-level factor).
+_n2 = 2_000
+_d2 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABCDEFGH"), _n2)),
+    "x": _rng_b.standard_normal(_n2),
+})
+_offs2 = {l: 0.1 * i for i, l in enumerate("ABCDEFGH")}
+_d2["y"] = _rng_b.standard_normal(_n2) + _d2["g"].map(_offs2).astype(float)
+# slice to the first 5 levels so the workload is a 10-contrast mvt integral
+_d2 = _d2[_d2["g"].isin(list("ABCDE"))].reset_index(drop=True)
+_d2["g"] = pd.Categorical(_d2["g"])
+_d2.to_csv(_BENCH_DIR / "bench_ols_mvt.csv", index=False)
+
+# W3: GLM logit + pairs (n=5k).
+_n3 = 5_000
+_d3 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABCD"), _n3)),
+    "x": _rng_b.standard_normal(_n3),
+})
+_eta = _d3["g"].map({"A": -0.5, "B": 0.0, "C": 0.5, "D": 1.0}).astype(float) + 0.3 * _d3["x"]
+_d3["y"] = (_rng_b.random(_n3) < 1.0 / (1.0 + np.exp(-_eta))).astype(int)
+_d3.to_csv(_BENCH_DIR / "bench_glm.csv", index=False)
+
+# W4: MixedLM (n=2k, 50 subjects).
+_n4 = 2_000
+_n_subj = 50
+_subj_id = _rng_b.integers(0, _n_subj, _n4)
+_b_subj = _rng_b.standard_normal(_n_subj) * 0.5
+_d4 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABCD"), _n4)),
+    "x": _rng_b.standard_normal(_n4),
+    "subj": _subj_id,
+})
+_d4["y"] = (
+    _d4["g"].map({"A": -0.3, "B": 0.0, "C": 0.3, "D": 0.6}).astype(float)
+    + 0.2 * _d4["x"] + _b_subj[_subj_id] + _rng_b.standard_normal(_n4)
+)
+_d4.to_csv(_BENCH_DIR / "bench_mlm.csv", index=False)
+
+# W5: Cox PH (n=5k).
+_n5 = 5_000
+_d5 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABCD"), _n5)),
+    "x": _rng_b.standard_normal(_n5),
+})
+_hazard = np.exp(
+    _d5["g"].map({"A": -0.3, "B": 0.0, "C": 0.3, "D": 0.6}).astype(float)
+    + 0.2 * _d5["x"]
+)
+_d5["T"] = _rng_b.exponential(1.0 / _hazard)
+_d5["status"] = (_rng_b.random(_n5) < 0.8).astype(int)
+_d5.to_csv(_BENCH_DIR / "bench_cox.csv", index=False)
+
+# W6: emtrends in continuous x (n=5k).
+_n6 = 5_000
+_d6 = pd.DataFrame({
+    "g": pd.Categorical(_rng_b.choice(list("ABC"), _n6)),
+    "x": _rng_b.standard_normal(_n6),
+})
+_d6["y"] = (
+    _d6["g"].map({"A": -0.5, "B": 0.0, "C": 0.5}).astype(float)
+    + 0.2 * _d6["x"]
+    + 0.1 * _d6["x"] * _d6["g"].map({"A": 0, "B": 1, "C": 2}).astype(float)
+    + _rng_b.standard_normal(_n6)
+)
+_d6.to_csv(_BENCH_DIR / "bench_emt.csv", index=False)
+
+print(f"  W1 OLS n={len(_d1)} / 4 levels")
+print(f"  W2 OLS_mvt n={len(_d2)} / 5 levels (10 contrasts)")
+print(f"  W3 GLM n={len(_d3)} / 4 levels")
+print(f"  W4 MLM n={len(_d4)} / 4 levels × {_n_subj} subjects")
+print(f"  W5 Cox n={len(_d5)} / 4 levels")
+print(f"  W6 emtrends n={len(_d6)} / 3 levels")
+""")
+
+# --- §XVIII.2 — Pymmeans-side timing.
+code(r"""
+# §XVIII.2 — Pymmeans-side benchmark loop.
+
+def _bench_py(name, fn, reps):
+    fn()  # warm-up
+    ts = []
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        fn()
+        ts.append(time.perf_counter() - t0)
+    ts.sort()
+    return {"name": name, "median": float(np.median(ts)),
+            "min": float(min(ts)), "reps": reps}
+
+# W1
+_d1 = pd.read_csv(_BENCH_DIR / "bench_ols.csv"); _d1["g"] = pd.Categorical(_d1["g"])
+def _w1():
+    _f = smf.ols("y ~ g + x", _d1).fit()
+    _ = pairs(emmeans(_f, "g")).frame
+
+# W2
+_d2 = pd.read_csv(_BENCH_DIR / "bench_ols_mvt.csv"); _d2["g"] = pd.Categorical(_d2["g"])
+def _w2():
+    _f = smf.ols("y ~ g + x", _d2).fit()
+    _ = pairs(emmeans(_f, "g"), adjust="mvt").frame
+
+# W3
+_d3 = pd.read_csv(_BENCH_DIR / "bench_glm.csv"); _d3["g"] = pd.Categorical(_d3["g"])
+def _w3():
+    _f = smf.glm("y ~ g + x", _d3, family=sm.families.Binomial()).fit()
+    _ = pairs(emmeans(_f, "g")).frame
+
+# W4
+_d4 = pd.read_csv(_BENCH_DIR / "bench_mlm.csv"); _d4["g"] = pd.Categorical(_d4["g"])
+def _w4():
+    _m = _mlm.MixedLM.from_formula("y ~ g + x", _d4, groups=_d4["subj"]).fit(reml=True)
+    _em = emmeans(_m, "g")
+    _em_kr = apply_kenward_roger(_em)
+    _ = pairs(_em_kr).frame
+
+# W5
+_d5 = pd.read_csv(_BENCH_DIR / "bench_cox.csv"); _d5["g"] = pd.Categorical(_d5["g"])
+def _w5():
+    _f = _hr.PHReg.from_formula(
+        "T ~ g + x", _d5, status=_d5["status"].to_numpy()
+    ).fit()
+    _ = pairs(emmeans(_f, "g")).frame
+
+# W6
+_d6 = pd.read_csv(_BENCH_DIR / "bench_emt.csv"); _d6["g"] = pd.Categorical(_d6["g"])
+def _w6():
+    _f = smf.ols("y ~ g * x", _d6).fit()
+    _ = emtrends(_f, "g", var="x").frame
+
+_PY_RESULTS = [
+    _bench_py("W1", _w1, 5),
+    _bench_py("W2", _w2, 3),
+    _bench_py("W3", _w3, 5),
+    _bench_py("W4", _w4, 3),
+    _bench_py("W5", _w5, 5),
+    _bench_py("W6", _w6, 5),
+]
+print("  pymmeans-side timings:")
+for _r in _PY_RESULTS:
+    print(f"    {_r['name']}  median = {_r['median']*1000:8.1f} ms"
+          f"  min = {_r['min']*1000:8.1f} ms  ({_r['reps']} reps)")
+""")
+
+# --- §XVIII.3 — R-side timing (if Rscript available) + comparison.
+code(r"""
+# §XVIII.3 — R-side timing + head-to-head comparison.
+#
+# If Rscript is available, write a single R script that runs all six
+# workloads on the same CSVs and prints CSV-like RESULT lines; parse
+# them back. If Rscript is not present, the comparison columns are
+# left as NaN and the table reports pymmeans-only timings.
+
+_R_SCRIPT = _BENCH_DIR / "bench_runs.R"
+_R_SCRIPT.write_text('''
+suppressPackageStartupMessages({
+  library(emmeans)
+  library(lme4)
+  library(lmerTest)
+  library(survival)
+})
+
+bench <- function(name, expr, reps) {
+  e <- substitute(expr)
+  eval(e, envir = parent.frame())
+  ts <- numeric(reps)
+  for (i in seq_len(reps)) {
+    t0 <- proc.time()[["elapsed"]]
+    eval(e, envir = parent.frame())
+    ts[i] <- proc.time()[["elapsed"]] - t0
+  }
+  ts <- sort(ts)
+  cat(sprintf("RESULT,%s,%.6f,%.6f,%d\\n", name, median(ts), min(ts), reps))
+}
+
+# W1
+d1 <- read.csv("/tmp/pymmeans_bench/bench_ols.csv"); d1$g <- factor(d1$g)
+bench("W1", { fit <- lm(y ~ g + x, data = d1)
+              pw  <- as.data.frame(pairs(emmeans(fit, ~ g))) }, 5)
+
+# W2
+d2 <- read.csv("/tmp/pymmeans_bench/bench_ols_mvt.csv"); d2$g <- factor(d2$g)
+bench("W2", { fit <- lm(y ~ g + x, data = d2)
+              pw  <- as.data.frame(pairs(emmeans(fit, ~ g), adjust = "mvt")) }, 3)
+
+# W3
+d3 <- read.csv("/tmp/pymmeans_bench/bench_glm.csv"); d3$g <- factor(d3$g)
+bench("W3", { fit <- glm(y ~ g + x, data = d3, family = binomial())
+              pw  <- as.data.frame(pairs(emmeans(fit, ~ g))) }, 5)
+
+# W4
+d4 <- read.csv("/tmp/pymmeans_bench/bench_mlm.csv"); d4$g <- factor(d4$g)
+bench("W4", { fit <- lmer(y ~ g + x + (1 | subj), data = d4, REML = TRUE,
+                          control = lmerControl(
+                            check.conv.singular = .makeCC("ignore", tol = 1e-4)))
+              pw  <- as.data.frame(pairs(emmeans(fit, ~ g, lmer.df = "kenward-roger"))) }, 3)
+
+# W5
+d5 <- read.csv("/tmp/pymmeans_bench/bench_cox.csv"); d5$g <- factor(d5$g)
+bench("W5", { fit <- coxph(Surv(T, status) ~ g + x, data = d5)
+              pw  <- as.data.frame(pairs(emmeans(fit, ~ g))) }, 5)
+
+# W6
+d6 <- read.csv("/tmp/pymmeans_bench/bench_emt.csv"); d6$g <- factor(d6$g)
+bench("W6", { fit <- lm(y ~ g * x, data = d6)
+              et  <- as.data.frame(emtrends(fit, ~ g, var = "x")) }, 5)
+''')
+
+_rscript = shutil.which("Rscript")
+_R_RESULTS = {}
+if _rscript is not None:
+    _t0_r = time.perf_counter()
+    _proc = subprocess.run(
+        [_rscript, str(_R_SCRIPT)], capture_output=True, text=True,
+        timeout=600,
+    )
+    _r_wall = time.perf_counter() - _t0_r
+    print(f"  R harness completed in {_r_wall:.1f}s")
+    for _line in _proc.stdout.splitlines():
+        if _line.startswith("RESULT,"):
+            _parts = _line.split(",")
+            _R_RESULTS[_parts[1]] = {
+                "median_r": float(_parts[2]), "min_r": float(_parts[3]),
+                "reps_r": int(_parts[4]),
+            }
+    if not _R_RESULTS:
+        print("  R harness produced no RESULT lines:")
+        print(_proc.stderr[-500:] if _proc.stderr else "(no stderr)")
+else:
+    print("  Rscript not found — comparison columns will be NaN.")
+
+# Build the comparison table.
+_rows = []
+for _py in _PY_RESULTS:
+    _r = _R_RESULTS.get(_py["name"])
+    _rows.append({
+        "W": _py["name"],
+        "pymmeans_ms": 1000.0 * _py["median"],
+        "R_emmeans_ms": (1000.0 * _r["median_r"]) if _r else float("nan"),
+        "ratio_py_over_R": (_py["median"] / _r["median_r"]) if _r else float("nan"),
+        "winner": (
+            "pymmeans" if (_r and _py["median"] < _r["median_r"])
+            else "R" if _r else "n/a"
+        ),
+    })
+_bench_table = pd.DataFrame(_rows)
+
+print()
+print("  Head-to-head wall-clock (median across reps):")
+with pd.option_context("display.float_format", lambda v: f"{v:.2f}"):
+    print(_bench_table.to_string(index=False))
+
+# Save the benchmark table for the paper to cite.
+_bench_table.to_csv(_BENCH_DIR / "bench_results.csv", index=False)
+
+# Contracts.
+# XVIII.1 — sanity: every workload produced a number.
+_complete = bool(_bench_table["pymmeans_ms"].notna().all())
+check("XVIII.1", "all 6 pymmeans benchmarks completed without error",
+      0.0 if _complete else 1.0, 0.0, "structural")
+
+# XVIII.2 — head-to-head: pymmeans wins at least 50% of comparisons (if R was run).
+if _R_RESULTS:
+    _wins = int((_bench_table["winner"] == "pymmeans").sum())
+    _r_run = int(_bench_table["winner"].isin(["pymmeans", "R"]).sum())
+    print(f"\n  pymmeans wins {_wins} of {_r_run} head-to-head comparisons.")
+    check("XVIII.2",
+          f"pymmeans wins >= 50% of head-to-head wall-clock comparisons ({_wins}/{_r_run})",
+          0.0 if (_wins / _r_run) >= 0.5 else 1.0, 0.0, "applied")
+    # XVIII.3 — pymmeans is never catastrophically slower than R (within 100x).
+    _max_ratio = float(_bench_table["ratio_py_over_R"].max())
+    print(f"  max pymmeans/R ratio across 6 workloads: {_max_ratio:.1f}x")
+    check("XVIII.3",
+          "pymmeans within 100x of R on every workload (catastrophic-slowdown guard)",
+          max(0.0, _max_ratio - 100.0), 0.0, "applied")
+else:
+    print("\n  Rscript not available — skipping head-to-head contracts.")
+""")
+
+# ================================================================== §XIX
+md(r"""
+# Section XIX — Validation scorecard
 """)
 
 code(r"""
