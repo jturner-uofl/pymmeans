@@ -9,6 +9,12 @@ from pymmeans.adapters import (
 from pymmeans.adjustments import adjust_pvalues
 from pymmeans.aft import from_aft
 from pymmeans.cld import cld
+from pymmeans.conformal import (
+    ConformalCounterfactualResult,
+    ConformalPIResult,
+    conformal_counterfactual_pi,
+    split_conformal_pi,
+)
 from pymmeans.contrasts import (
     CONTRAST_METHODS,
     ContrastResult,
@@ -134,13 +140,15 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "CONTRAST_METHODS",
     "TRANSFORMS",
     "BoundaryFitError",
     "Check",
+    "ConformalCounterfactualResult",
+    "ConformalPIResult",
     "ContrastResult",
     "EMMResult",
     "EValueResult",
@@ -172,6 +180,7 @@ __all__ = [
     "cld",
     "comb_facs",
     "confint",
+    "conformal_counterfactual_pi",
     "contrast",
     "ddf_lb",
     "design_corrected_vcov",
@@ -238,6 +247,7 @@ __all__ = [
     "satmodcomp",
     "satterthwaite_df",
     "set_emm_options",
+    "split_conformal_pi",
     "split_fac",
     "summary",
     "test",

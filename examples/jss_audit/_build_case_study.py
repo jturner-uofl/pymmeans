@@ -4853,7 +4853,273 @@ check("XIX.7", "pool_imputed: FMI in [0, 1]",
 
 # ================================================================== §XX
 md(r"""
-# Section XX — Validation scorecard
+# Section XX — Conformal prediction intervals · split + counterfactual
+
+This section verifies the **two new conformal-inference public
+functions added in this release** of pymmeans:
+
+* **`pymmeans.split_conformal_pi`** — the split-conformal predictor
+  of Vovk et al. (2005) and Lei et al. (2018). Distribution-free
+  finite-sample marginal coverage guarantees on prediction
+  intervals for individual outcomes from an `ml_emmeans` model.
+* **`pymmeans.conformal_counterfactual_pi`** — the weighted split-
+  conformal counterfactual predictor of Lei & Candès (2021). Same
+  finite-sample guarantee, but on the **counterfactual outcome
+  ``Y(t*) | X``** — valid even at units where the counterfactual
+  was not observed (the missing-data case).
+
+Why this matters
+----------------
+R `emmeans` provides only **Wald-type** confidence intervals on
+EMM cells and contrast estimates, which assume the underlying
+sampling distribution is approximately Gaussian. Under
+heavy-tailed or contaminated errors, Wald intervals **undercover**.
+Split-conformal PIs are **distribution-free**: they hit nominal
+coverage to within Monte Carlo error regardless of the error
+distribution, as long as the (train, calibration, test) draws are
+exchangeable.
+
+Lei-Candès counterfactual conformal extends this guarantee to the
+*missing-counterfactual* setting that defines all of causal
+inference: for a unit observed in the control arm, what is a
+valid prediction interval on its **counterfactual outcome under
+treatment**? Standard Wald intervals on `from_predict` /
+`ml_emmeans` output cannot answer this; weighted conformal can.
+
+Verification strategy
+---------------------
+Both functions are verified by **direct empirical coverage** on
+fixed-seed Monte Carlo simulations:
+
+* §XX.1 simulates 50 replications × 200 test points from each of
+  three error distributions (Gaussian, Student-t with 3 dof, and
+  Gaussian-with-10%-contamination) and confirms split-conformal
+  coverage matches the nominal level to within Monte Carlo error.
+* §XX.2 simulates 40 replications × ~100 control-arm test points
+  with known counterfactual outcomes ``Y(1)`` and confirms the
+  weighted-conformal PI covers the unobserved ``Y(1)`` at nominal
+  level even when restricted to the control arm.
+""")
+
+# --- §XX.1 — Split-conformal coverage across 3 error distributions.
+code(r"""
+# §XX.1 — Split-conformal PI: empirical coverage on 3 error distributions.
+#
+# Per Lei et al. (2018), the split-conformal predictor's marginal
+# coverage guarantee holds for ANY exchangeable (train, cal, test)
+# draw, so heavy-tailed and contaminated error distributions should
+# still produce coverage >= nominal. We verify on Gaussian, Student-
+# t with 3 df (heavy tails), and Gaussian contaminated with 10%
+# 5x-amplitude outliers.
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
+from pymmeans import split_conformal_pi
+from pymmeans.ml import from_predict, ml_emmeans
+
+
+def _bench_cov(distro: str, level: float, n_reps: int = 50,
+               n_train: int = 400, n_cal: int = 300, n_test: int = 200,
+               base_seed: int = 20260601) -> float:
+    # Empirical coverage of split-conformal across n_reps simulations.
+    cov = []
+    for rep in range(n_reps):
+        rng = np.random.default_rng(base_seed + rep)
+        n_all = n_train + n_cal + n_test
+        # Generate covariates + treatment + response.
+        df = pd.DataFrame({
+            "treat": pd.Categorical(rng.integers(0, 2, n_all)),
+            "x1":    rng.standard_normal(n_all),
+            "x2":    rng.standard_normal(n_all),
+        })
+        mu_true = (
+            df["treat"].astype(int) * 1.5
+            + 0.5 * df["x1"] + 0.2 * df["x2"]
+        ).to_numpy()
+        if distro == "gaussian":
+            eps = rng.standard_normal(n_all)
+        elif distro == "t3":
+            eps = rng.standard_t(df=3, size=n_all)
+        else:  # contaminated
+            eps = rng.standard_normal(n_all)
+            eps[rng.random(n_all) < 0.10] *= 5
+        df["y"] = mu_true + eps
+
+        tr  = df.iloc[:n_train].reset_index(drop=True)
+        cal = df.iloc[n_train:n_train+n_cal].reset_index(drop=True)
+        te  = df.iloc[n_train+n_cal:].reset_index(drop=True)
+        X_tr = tr[["treat", "x1", "x2"]].astype(float).to_numpy()
+        model = GradientBoostingRegressor(
+            n_estimators=50, max_depth=3, random_state=rep,
+        ).fit(X_tr, tr["y"].to_numpy())
+        predict_fn = (
+            lambda d, m=model: m.predict(
+                d[["treat", "x1", "x2"]].astype(float).to_numpy()
+            )
+        )
+        info = from_predict(
+            predict_fn=predict_fn, data=tr,
+            factors={"treat": [0, 1]}, numerics=["x1", "x2"],
+            response="y",
+        )
+        em = ml_emmeans(info, "treat")
+        res = split_conformal_pi(em, cal, level=level)
+        # Per-individual PI on the held-out test set.
+        mu_te = predict_fn(te)
+        lo = mu_te - res.q_hat
+        hi = mu_te + res.q_hat
+        y_te = te["y"].to_numpy()
+        cov.append(((lo <= y_te) & (y_te <= hi)).mean())
+    return float(np.mean(cov))
+
+
+_COV_RESULTS = []
+for _dist in ("gaussian", "t3", "contaminated"):
+    for _lvl in (0.80, 0.90, 0.95):
+        _emp = _bench_cov(_dist, _lvl, n_reps=50)
+        _COV_RESULTS.append((_dist, _lvl, _emp))
+        print(f"  {_dist:>13s}  level={_lvl:.2f}  empirical={_emp:.4f}"
+              f"  gap={_emp - _lvl:+.4f}")
+
+# Contracts. With 50 reps × 200 test points = 10,000 test points per
+# (distro, level) cell, the MC SE on empirical coverage is roughly
+# sqrt(level*(1-level)/10_000) ≈ 0.003. Allow 0.03 tolerance (10× SE).
+for _dist, _lvl, _emp in _COV_RESULTS:
+    check(f"XX.1.{_dist}.{int(_lvl*100):02d}",
+          f"split-conformal empirical coverage >= nominal-0.03 ({_dist}, level={_lvl})",
+          max(0.0, _lvl - _emp - 0.03), 0.0, "Monte Carlo")
+""")
+
+# --- §XX.2 — Conformal counterfactual: coverage of unobserved Y(1) at T=0 units.
+md(r"""
+## XX.2 — Weighted conformal counterfactual coverage (Lei-Candès 2021)
+
+Now the harder result: prediction intervals on the **counterfactual
+outcome** ``Y(1) | X`` for units observed in the **control arm**
+(``T = 0``). For these units, ``Y(1)`` is not directly observed —
+this is the canonical "missing counterfactual" problem at the
+heart of causal inference.
+
+Lei & Candès (2021) Algorithm 1 (Weighted Split Conformal Prediction
+in Causal Inference) constructs valid PIs in this setting by
+*inverse-propensity-weighting* the nonconformity scores from the
+treated calibration subset. The marginal-coverage guarantee
+``P(Y(1)_new ∈ PI(X_new)) ≥ 1 - α`` holds under the standard
+**unconfoundedness + overlap** assumptions plus exchangeability.
+
+We verify this on a simulated data-generating process with known
+``Y(0)`` and ``Y(1)`` potential outcomes (so the truth is
+available for empirical-coverage assessment). The contract checks
+coverage **specifically on control-arm test units** — the
+missing-counterfactual case Lei-Candès was designed for.
+""")
+
+code(r"""
+# §XX.2 — Conformal counterfactual coverage of unobserved Y(1) at T=0 units.
+
+from sklearn.linear_model import LogisticRegression
+from pymmeans import conformal_counterfactual_pi
+
+
+def _bench_cf_cov(level: float, n_reps: int = 40,
+                   n_train: int = 400, n_cal: int = 300, n_test: int = 200,
+                   base_seed: int = 20260602) -> tuple[float, float]:
+    # Empirical coverage of Y(1) at all test units AND at T=0-only test units.
+    cov_all = []
+    cov_t0 = []
+    for rep in range(n_reps):
+        rng = np.random.default_rng(base_seed + rep)
+        n_all = n_train + n_cal + n_test
+        X = rng.standard_normal((n_all, 3))
+        logit = 0.5 * X[:, 0] - 0.3 * X[:, 1]
+        p1 = 1.0 / (1.0 + np.exp(-logit))
+        T = (rng.random(n_all) < p1).astype(int)
+        Y0 = 1.0 + 0.5 * X[:, 0] + 0.2 * X[:, 1] + rng.standard_normal(n_all)
+        Y1 = 3.0 + 0.7 * X[:, 0] - 0.1 * X[:, 1] + rng.standard_normal(n_all)
+        Y_obs = np.where(T == 1, Y1, Y0)
+
+        df = pd.DataFrame({
+            "treat": pd.Categorical(T),
+            "x1": X[:, 0], "x2": X[:, 1], "x3": X[:, 2],
+            "y": Y_obs,
+        })
+        tr  = df.iloc[:n_train].reset_index(drop=True)
+        cal = df.iloc[n_train:n_train+n_cal].reset_index(drop=True)
+        te  = df.iloc[n_train+n_cal:].reset_index(drop=True)
+        y1_te = Y1[n_train+n_cal:]
+
+        # Train outcome on T=1 subset of train.
+        tr_t1 = tr[tr["treat"] == 1]
+        X_tr = tr_t1[["treat", "x1", "x2", "x3"]].astype(float).to_numpy()
+        outcome = GradientBoostingRegressor(
+            n_estimators=50, max_depth=3, random_state=rep,
+        ).fit(X_tr, tr_t1["y"].to_numpy())
+        predict_fn = (
+            lambda d, m=outcome: m.predict(
+                d[["treat", "x1", "x2", "x3"]].astype(float).to_numpy()
+            )
+        )
+
+        # Propensity on full train.
+        prop = LogisticRegression(max_iter=1000).fit(
+            tr[["x1", "x2", "x3"]].to_numpy(),
+            tr["treat"].astype(int).to_numpy(),
+        )
+        prop_fn = (
+            lambda d, p=prop: p.predict_proba(
+                d[["x1", "x2", "x3"]].to_numpy()
+            )[:, 1]
+        )
+
+        info = from_predict(
+            predict_fn=predict_fn, data=tr,
+            factors={"treat": [0, 1]},
+            numerics=["x1", "x2", "x3"], response="y",
+        )
+        em = ml_emmeans(info, "treat")
+        res = conformal_counterfactual_pi(em, cal, prop_fn,
+                                           treatment_value=1, level=level)
+
+        mu_te = predict_fn(te)
+        lo = mu_te - res.q_hat
+        hi = mu_te + res.q_hat
+
+        cov_all.append(((lo <= y1_te) & (y1_te <= hi)).mean())
+        mask_t0 = (te["treat"].astype(int) == 0).to_numpy()
+        if mask_t0.sum() >= 5:
+            cov_t0.append(
+                ((lo[mask_t0] <= y1_te[mask_t0])
+                 & (y1_te[mask_t0] <= hi[mask_t0])).mean()
+            )
+    return float(np.mean(cov_all)), float(np.mean(cov_t0))
+
+
+_CF_RESULTS = []
+for _lvl in (0.80, 0.90, 0.95):
+    _emp_all, _emp_t0 = _bench_cf_cov(_lvl, n_reps=40)
+    _CF_RESULTS.append((_lvl, _emp_all, _emp_t0))
+    print(f"  level={_lvl:.2f}"
+          f"   all-units coverage = {_emp_all:.4f}   gap={_emp_all - _lvl:+.4f}"
+          f"   T=0 coverage = {_emp_t0:.4f}   gap={_emp_t0 - _lvl:+.4f}")
+
+# Contracts. 40 reps × 200 = 8,000 test points per level; ~half are
+# T=0 → ~4,000 T=0 points. MC SE ≈ sqrt(level*(1-level)/4000) ≈ 0.005.
+# Tolerance 0.04 (8× SE) for safety.
+for _lvl, _emp_all, _emp_t0 in _CF_RESULTS:
+    check(f"XX.2.all.{int(_lvl*100):02d}",
+          f"Lei-Candès counterfactual coverage of Y(1) at all units >= "
+          f"nominal-0.04 (level={_lvl})",
+          max(0.0, _lvl - _emp_all - 0.04), 0.0, "Monte Carlo")
+    check(f"XX.2.t0.{int(_lvl*100):02d}",
+          f"Lei-Candès counterfactual coverage of Y(1) at T=0 units "
+          f">= nominal-0.05 (level={_lvl}; missing-counterfactual case)",
+          max(0.0, _lvl - _emp_t0 - 0.05), 0.0, "Monte Carlo")
+""")
+
+# ================================================================== §XXI
+md(r"""
+# Section XXI — Validation scorecard
 """)
 
 code(r"""
