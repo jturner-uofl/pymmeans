@@ -1,42 +1,204 @@
-# pymmeans
+---
+title: pymmeans — Estimated Marginal Means for Python
+hide:
+  - navigation
+  - toc
+---
 
-Estimated marginal means (EMMs) for Python — a native implementation of R's
-[emmeans](https://cran.r-project.org/package=emmeans) package, with no R
-dependency.
+<div class="hero" markdown>
 
-```python
-import statsmodels.formula.api as smf
-from pymmeans import emmeans, pairs
+# pymmeans { .hero-title }
 
-model = smf.ols("growth ~ fertilizer * sunlight", data=df).fit()
-print(emmeans(model, "fertilizer"))
-print(pairs(emmeans(model, "fertilizer")))
+**Estimated marginal means for Python.** A native implementation of R's
+`emmeans` and `pbkrtest`, validated to floating-point precision,
+integrated with modern causal-inference and uncertainty-quantification
+methods.
+
+[Get started](getting-started.md){ .md-button .md-button--primary }
+[GitHub](https://github.com/jturner-uofl/pymmeans){ .md-button }
+[Validation notebook](https://nbviewer.org/github/jturner-uofl/pymmeans/blob/main/examples/jss_audit/jss_case_study.ipynb){ .md-button }
+
+</div>
+
+---
+
+## At a glance
+
+<div class="grid cards" markdown>
+
+-   :material-check-decagram: __Floating-point R parity__
+
+    ---
+
+    134 direct cross-validation contracts against R `emmeans` reference
+    values, mostly at `atol = 1e-14`.
+
+    [R-parity matrix →](r_parity_matrix.md)
+
+-   :material-speedometer: __Faster than R on common paths__
+
+    ---
+
+    1.6–4.1 times faster than R `emmeans` across four of six
+    representative workloads; the remaining two are diagnosed.
+
+    [Performance report →](PERFORMANCE_REPORT.md)
+
+-   :material-robot-outline: __Machine-learning g-computation__
+
+    ---
+
+    Plug any sklearn-style `predict()` callable into the EMM grammar
+    via `from_predict`. No R `emmeans` analogue.
+
+    [Tour →](getting-started.md)
+
+-   :material-shield-check-outline: __Modern causal-inference & UQ__
+
+    ---
+
+    E-value sensitivity, Rubin's-rules pooling, split + counterfactual
+    conformal, AIPW, cross-fitted DML. All bundled.
+
+    [API reference →](api/emmeans.md)
+
+-   :material-test-tube: __1,037 tests, 87 % coverage__
+
+    ---
+
+    251 enumerated validation contracts in a single executable notebook.
+    Zero failures.
+
+    [Validation →](vs-r.md)
+
+-   :material-language-python: __Pure Python__
+
+    ---
+
+    Depends only on `numpy`, `pandas`, `patsy`, `scipy`, `statsmodels`.
+    No R toolchain required.
+
+    [Install ↓](#installation)
+
+</div>
+
+---
+
+## Installation
+
+```bash
+pip install pymmeans
 ```
 
-## What's in the box
+Optional extras for plotting and the showcase notebook:
 
-- **`emmeans`** — marginal means with optional `by` conditioning, `at`
-  overrides, response-scale back-transformation, and analytic
-  marginalization that handles 4M+ row grids in milliseconds.
-- **`pairs`, `contrast`** — pairwise, revpairwise, trt.vs.ctrl, polynomial,
-  consecutive, and user-supplied contrasts with Tukey/Bonferroni/Holm/Šidák
-  multiplicity correction.
-- **`emtrends`** — slopes of continuous predictors at each EMM grid point.
-- **`bootstrap_ci`** — parametric percentile CIs from N(β̂, V) for
-  asymmetric / response-scale intervals.
-- **`effect_size`** — Cohen's d and Hedge's g on contrast output.
-- **`plot`, `emmip`** — forest and interaction plots via matplotlib.
-- **`joint_tests`** — Type III joint Wald tests for every term in the model.
-- **MixedLM support** — `statsmodels.formula.api.mixedlm` results work out
-  of the box.
+```bash
+pip install "pymmeans[plot]"
+pip install "pymmeans[tutorial]"
+```
 
-## Status
+Python 3.10 or later required.
 
-Beta (v0.2.0). Feature-complete for the v0.2 surface. Validated
-against the canonical R `emmeans` reference at `atol=1e-4` on 18
-reference comparisons spanning OLS, GLM, MixedLM, GEE, Cox PH,
-beta regression, response-scale, by-grouped, and factor-from-numeric
-edge cases.
+---
 
-See [Getting started](getting-started.md) for installation and the
-[API reference](api/emmeans.md) for full function signatures.
+## Usage
+
+=== "Parametric EMMs"
+
+    ```python
+    import statsmodels.formula.api as smf
+    from pymmeans import emmeans, pairs
+
+    fit = smf.ols("growth ~ fertilizer * sunlight", data=df).fit()
+    em  = emmeans(fit, specs=["fertilizer"])
+    pw  = pairs(em, adjust="tukey")
+    ```
+
+=== "Mixed models + Kenward–Roger"
+
+    ```python
+    import statsmodels.regression.mixed_linear_model as mlm
+    from pymmeans import emmeans
+    from pymmeans.satterthwaite import apply_kenward_roger
+
+    fit   = mlm.MixedLM.from_formula(
+        "reaction ~ days", df, groups="subject"
+    ).fit(reml=True)
+    em_kr = apply_kenward_roger(emmeans(fit, specs=["days"]))
+    ```
+
+=== "ML adapter"
+
+    ```python
+    from sklearn.ensemble import GradientBoostingRegressor
+    from pymmeans import from_predict, ml_emmeans, ml_contrast
+
+    gbm  = GradientBoostingRegressor().fit(X_train, y_train)
+    info = from_predict(
+        predict_fn=lambda d: gbm.predict(d[features]),
+        data=train_df, factors={"treat": [0, 1]},
+        numerics=features, response="y",
+    )
+    em_ml = ml_emmeans(info, specs="treat")
+    ct_ml = ml_contrast(em_ml, method="trt.vs.ctrl", ref=0)
+    ```
+
+=== "Causal-inference extensions"
+
+    ```python
+    from pymmeans import (
+        e_value,                       # VanderWeele & Ding (2017)
+        pool_imputed,                  # Rubin (1987); Barnard & Rubin (1999)
+        split_conformal_pi,            # Vovk et al. (2005); Lei et al. (2018)
+        conformal_counterfactual_pi,   # Lei & Candès (2021)
+        aipw_ate,                      # Robins, Rotnitzky & Zhao (1994)
+        cross_fit_ml_emmeans,          # Chernozhukov et al. (2018)
+    )
+    ```
+
+---
+
+## What pymmeans replaces
+
+A Python user installing `pymmeans` no longer needs to install or
+maintain an R toolchain for any of the following packages:
+
+| R package | Capability                                                              | Coverage   |
+|-----------|-------------------------------------------------------------------------|------------|
+| `emmeans`   | EMMs, contrasts, multiplicity, response-scale back-transforms         | Full       |
+| `lsmeans`   | Predecessor to `emmeans`                                              | Full       |
+| `multcomp`  | Bonferroni / Šidák / Holm / Tukey / Dunnett / mvt / Hochberg / Hommel | Full       |
+| `mvtnorm`   | Multivariate-t CDF for `mvt` adjustment                              | Full (SciPy backend) |
+| `pbkrtest`  | Kenward–Roger covariance + parametric-bootstrap nested test + F-tests | Full (6 functions) |
+| `lmerTest`  | Satterthwaite df for `lmer`                                          | Full       |
+| `EValue`    | VanderWeele–Ding E-value                                             | Full       |
+| `effects`, `predictmeans`, `phia`, `gmodels::estimable` | Adjusted means, post-hoc, custom contrasts | Subsumed |
+| `mice::pool` | Rubin's-rules pooling                                                | Partial    |
+
+See the [R-parity matrix](r_parity_matrix.md) for the full per-function
+table.
+
+---
+
+## Cite this work
+
+```bibtex
+@software{pymmeans,
+  author  = {Turner, Jason S.},
+  title   = {pymmeans: Estimated Marginal Means for Python},
+  version = {0.6.0},
+  year    = {2026},
+  url     = {https://github.com/jturner-uofl/pymmeans},
+}
+```
+
+A `CITATION.cff` file is committed to the repository root; GitHub
+renders a "Cite this repository" button from it automatically.
+
+---
+
+<small>
+`pymmeans` is released under GPL-3.0-or-later, matching the licence of
+R `emmeans`. See the [GitHub repository](https://github.com/jturner-uofl/pymmeans)
+for source, releases, issue tracker, and contribution guidelines.
+</small>
