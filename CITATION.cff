@@ -1,61 +1,74 @@
 cff-version: 1.2.0
 message: "If you use pymmeans in your research, please cite it as below."
-title: "pymmeans: Estimated marginal means for Python"
+title: "pymmeans: Estimated Marginal Means for Python"
 abstract: >
-  pymmeans is a native-Python implementation of R's emmeans package
-  (Lenth 2024) for estimated marginal means (EMMs), pairwise and
-  custom contrasts, and multiplicity adjustments on fitted statistical
-  models. It supports statsmodels OLS / GLM / MixedLM / GEE / Cox /
-  BetaModel, the linearmodels panel and IV result classes, and any
-  prediction-only model with a ``.predict()`` method via a
-  beyond-R-parity ML adapter (g-computation / prediction-surface
-  averaging). The implementation uses an analytic Kronecker-product
-  marginalisation (no grid materialisation) so EMMs on designs with
-  500K-row to 46M-row reference grids run in milliseconds where R
-  emmeans refuses or runs out of memory. Inference paths include
-  Wald, Satterthwaite, Kenward-Roger (Kackar-Harville), parametric
-  bootstrap, non-parametric case bootstrap with refit, permutation
-  testing with Phipson-Smyth correction, and Bayesian / posterior
-  draws.
+  pymmeans is a native-Python implementation of R's emmeans and
+  pbkrtest packages for estimated marginal means (EMMs), pairwise
+  and custom contrasts, multiplicity adjustments (Bonferroni,
+  Sidak, Holm, Tukey, Dunnett, multivariate-t, Benjamini-Hochberg,
+  Benjamini-Yekutieli, Hochberg, Hommel, Scheffe), and small-
+  sample mixed-model inference (Satterthwaite, Kenward-Roger,
+  parametric bootstrap) on fitted statistical models. It supports
+  statsmodels OLS / GLM / MixedLM / GEE / PHReg / BetaModel /
+  OrderedModel / MNLogit; linearmodels panel and IV result classes;
+  parametric AFT survival fits via lifelines; survey-weighted GLMs;
+  and any prediction-only model with a .predict() method via a
+  scikit-learn-style ML adapter (g-computation / prediction-surface
+  averaging) that has no R emmeans counterpart. Beyond R-emmeans
+  parity, pymmeans integrates four causal-inference and uncertainty-
+  quantification capabilities not bundled in any single R package:
+  VanderWeele-Ding E-value sensitivity, Rubin's-rules multiple-
+  imputation pooling with the Barnard-Rubin small-sample df
+  correction, split- and Lei-Candes counterfactual conformal
+  prediction intervals, and augmented-inverse-probability-weighted
+  plus cross-fitted double-machine-learning ATE estimation. The
+  package matches R emmeans numerically to floating-point precision
+  on its deterministic surface (134 direct cross-validation
+  contracts) and is 1.6-4.1x faster on the four most-used code
+  paths. The package ships 1037 unit tests at 87% line coverage and
+  a 251-contract narrative validation notebook with zero failures.
 authors:
   - family-names: Turner
-    given-names: Jason
+    given-names: Jason S.
     email: jason.s.turner@gmail.com
-version: 0.1.8
-date-released: 2026-05-27
+    affiliation: "Independent Researcher"
+version: 0.6.0
+date-released: 2026-06-08
 license: GPL-3.0-or-later
 repository-code: "https://github.com/jturner-uofl/pymmeans"
 url: "https://github.com/jturner-uofl/pymmeans"
 type: software
 keywords:
-  - estimated marginal means
+  - "estimated marginal means"
+  - "least-squares means"
   - emmeans
-  - least-squares means
   - lsmeans
-  - linear models
-  - mixed-effects models
-  - generalized linear models
-  - multiplicity adjustment
-  - Satterthwaite degrees of freedom
-  - Kenward-Roger correction
-  - bootstrap inference
-  - g-computation
-  - statsmodels
-  - Python
-references:
-  - type: article
-    title: "Least-squares means: the R package lsmeans"
-    authors:
-      - family-names: Lenth
-        given-names: Russell V.
-    year: 2016
-    volume: 69
-    issue: 1
-    doi: 10.18637/jss.v069.i01
-  - type: software
-    title: "emmeans: Estimated marginal means, aka least-squares means"
-    authors:
-      - family-names: Lenth
-        given-names: Russell V.
-    year: 2024
-    url: "https://cran.r-project.org/package=emmeans"
+  - pbkrtest
+  - contrasts
+  - "multiplicity adjustment"
+  - "Kenward-Roger"
+  - "Satterthwaite degrees of freedom"
+  - "mixed-effects models"
+  - "machine learning"
+  - "g-computation"
+  - "conformal prediction"
+  - "double machine learning"
+  - "doubly-robust estimation"
+  - "AIPW"
+  - "multiple imputation"
+  - "Rubin's rules"
+  - "E-value sensitivity"
+  - "causal inference"
+  - statistics
+  - python
+preferred-citation:
+  type: software
+  title: "pymmeans: Estimated Marginal Means for Python"
+  authors:
+    - family-names: Turner
+      given-names: Jason S.
+      email: jason.s.turner@gmail.com
+  version: 0.6.0
+  year: 2026
+  url: "https://github.com/jturner-uofl/pymmeans"
+  license: GPL-3.0-or-later

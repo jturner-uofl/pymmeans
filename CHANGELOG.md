@@ -5,6 +5,116 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-06-08
+
+### Added
+
+- Top-level `Makefile` providing canonical reproduction entry points
+  (`make reproduce`, `make test`, `make notebook`, `make html`,
+  `make benchmarks`, `make clean`) — closes the JSS replication-materials
+  submission checklist item.
+
+### Documentation
+
+- Major README polish with badges, headline numbers, validation evidence
+  pointers, and citation block.
+- New `CONTRIBUTING.md` + `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
+- New `.github/ISSUE_TEMPLATE/` (bug report, R-parity discrepancy, feature
+  request) and `.github/PULL_REQUEST_TEMPLATE.md`.
+- `CITATION.cff` refreshed with v0.6.0 metadata and full keyword list.
+
+### Confirmed shipped (no code change)
+
+- Hochberg and Hommel multiplicity adjustments (delegated to
+  `statsmodels.multipletests`, verified against R `p.adjust` to
+  floating-point precision).
+
+## [0.5.0] — 2026-06-01
+
+### Added — TABLE-1.8 #1 + #2 (double machine learning)
+
+- `pymmeans.cross_fit_ml_emmeans()`: K-fold cross-fitted g-computation
+  through `ml_emmeans`. Every prediction used in the marginal-mean
+  average is out-of-sample with respect to the model that produced it
+  (the structural property double machine learning depends on;
+  Chernozhukov et al. 2018).
+- `pymmeans.aipw_ate()`: doubly-robust augmented inverse-probability-
+  weighted ATE estimator (Robins, Rotnitzky & Zhao 1994) with
+  influence-function-based standard errors. Consistent if EITHER the
+  outcome model OR the propensity model is correctly specified.
+- `pymmeans.AIPWResult` public dataclass.
+- `src/pymmeans/double_ml.py` module + `tests/test_double_ml.py`
+  (15 unit tests).
+- §XXI of the validation notebook: AIPW double-robust property
+  verified by 200-replication Monte-Carlo; cross-fit structural
+  correctness verified at machine precision. 8 new contracts.
+
+## [0.4.0] — 2026-05-31
+
+### Added — TABLE-1.8 #3 + #5 (conformal prediction)
+
+- `pymmeans.split_conformal_pi()`: split-conformal prediction intervals
+  on `ml_emmeans` cell predictions (Vovk et al. 2005, Lei et al. 2018
+  JASA). Distribution-free finite-sample marginal-coverage guarantee
+  under exchangeability.
+- `pymmeans.conformal_counterfactual_pi()`: weighted split-conformal
+  counterfactual prediction intervals (Lei & Candès 2021 JRSSB
+  Algorithm 1). Valid coverage of unobserved `Y(t*) | X` even at units
+  where `t*` was not observed.
+- `pymmeans.ConformalPIResult`, `pymmeans.ConformalCounterfactualResult`
+  public dataclasses.
+- `src/pymmeans/conformal.py` module + `tests/test_conformal.py`
+  (22 unit tests).
+- §XX of the validation notebook: split-conformal coverage at within
+  ±0.006 of nominal across Gaussian, Student-t with 3 df, and
+  contaminated errors; Lei-Candès counterfactual coverage of unobserved
+  Y(1) at control-arm test units within ±0.005 of nominal.
+  15 new contracts.
+
+## [0.3.0] — 2026-05-30
+
+### Added — TABLE-1.8 #7 + #8 (sensitivity + MI pooling)
+
+- `pymmeans.e_value()`: VanderWeele-Ding (2017) E-value sensitivity
+  statistic. Reproduces the VanderWeele-Ding smoking worked example
+  (RR=10.73 → E≈20.95) to within 0.01. Conversions for odds ratios,
+  hazard ratios, and standardised mean differences via Mathur et al.
+  (2018).
+- `pymmeans.pool_imputed()`: Rubin's (1987) rules for pooling EMM /
+  contrast results across multiply-imputed datasets, with the
+  Barnard-Rubin (1999) small-sample degrees-of-freedom correction.
+  Total-variance identity verified at machine precision.
+- `pymmeans.EValueResult`, `pymmeans.PooledImputationResult` public
+  dataclasses.
+- `src/pymmeans/sensitivity.py` + `src/pymmeans/imputation.py` modules
+  + 27 unit tests.
+- §XIX of the validation notebook: E-value closed-form match to
+  published values; Rubin identity to machine precision; FMI in [0, 1].
+  7 new contracts.
+
+## [0.2.0] — 2026-05-28
+
+### Added — applied case studies, performance benchmarks, ML-adapter showcase
+
+- §XIV LaLonde NSW (Dehejia-Wahba 1999 experimental subset) applied
+  case study: regression-adjusted ATE plus GBM g-computation via the
+  ML adapter. Published DiM = \$1,794.34 recovered.
+- §XV RHC (Connors et al. 1996 JAMA, n=5735) case study: logistic-GLM-
+  adjusted risk difference plus GBM g-computation.
+- §XVI IHDP (Hill 2011 JCGS semi-synthetic, n=672 × 10 reps) case study
+  with KNOWN simulated true ATE. GBM g-comp RMSE = 0.17 vs OLS-adjusted
+  RMSE = 1.59 — **9.5× tighter** through `from_predict`.
+- §XVII SUPPORT2 (Knaus et al. 1995, n=9037) case study: Cox PH
+  pairwise log-HR with Tukey adjustment. Cancer-highest-hazard
+  ordering reproduced after covariate adjustment.
+- §XVIII performance benchmarks vs R `emmeans` on six representative
+  workloads. `pymmeans` 1.6-4.1× faster on four; the two slower paths
+  (multivariate-t QMC adjustment and Cox PH) are diagnosed and
+  explained as deliberate precision trade-off + Python ecosystem gap.
+- Cross-`adjust` matrix-row Bonferroni rule (R parity fix); degenerate-
+  posterior warning on `posterior_emmeans` when empirical SE is below
+  the floating-point floor.
+
 ## [0.1.8] — 2026-05-27
 
 ### Fixed (memory)
