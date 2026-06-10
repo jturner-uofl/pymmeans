@@ -1,5 +1,11 @@
 site_name: pymmeans
-site_description: Estimated marginal means for Python — a native implementation of R's emmeans
+site_description: >-
+  pymmeans is estimated marginal means (EMMs / least-squares means) for
+  Python — a native implementation of R's emmeans and pbkrtest with no R
+  dependency. Contrasts, multiplicity adjustments, Kenward-Roger and
+  Satterthwaite degrees of freedom, machine-learning g-computation,
+  conformal prediction, and doubly-robust estimation.
+site_author: Jason S. Turner
 site_url: https://jturner-uofl.github.io/pymmeans/
 repo_url: https://github.com/jturner-uofl/pymmeans
 repo_name: jturner-uofl/pymmeans
@@ -7,6 +13,7 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  custom_dir: overrides
   features:
     - navigation.tabs
     - navigation.tabs.sticky

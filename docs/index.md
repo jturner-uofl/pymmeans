@@ -1,5 +1,12 @@
 ---
 title: pymmeans — Estimated Marginal Means for Python
+description: >-
+  pymmeans brings R emmeans to Python. Estimated marginal means,
+  least-squares means, contrasts, Tukey and Dunnett multiplicity
+  adjustments, Kenward-Roger and Satterthwaite degrees of freedom,
+  machine-learning g-computation, conformal prediction, and
+  doubly-robust estimation — validated against R emmeans to
+  floating-point precision, with no R dependency.
 hide:
   - navigation
   - toc

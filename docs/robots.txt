@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jturner-uofl.github.io/pymmeans/sitemap.xml
