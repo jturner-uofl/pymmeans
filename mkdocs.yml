@@ -47,7 +47,7 @@ theme:
   favicon: null
 
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/pymmeans.css
 
 extra:
   social:
