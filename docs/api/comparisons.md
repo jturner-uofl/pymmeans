@@ -1,0 +1,3 @@
+# `pymmeans.comparisons`
+
+::: pymmeans.comparisons

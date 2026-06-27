@@ -973,3 +973,214 @@ def pwpp(
     ax.set_ylabel(f"Pairwise p-value (adjust={adjust})")
     ax.legend(loc="best", frameon=False)
     return ax
+
+
+# ---------------------------------------------------------------------------
+# marginaleffects-style plots: predictions / slopes / comparisons.
+#
+# These visualise the result frames produced by ``avg_predictions``,
+# ``avg_slopes``, and ``avg_comparisons``. They mirror the
+# ``marginaleffects`` ``plot_predictions`` / ``plot_slopes`` /
+# ``plot_comparisons`` family: a fitted curve (or points) with a
+# confidence band for predictions across a focal variable, and forest-style
+# point-and-interval plots for the averaged slopes / comparisons.
+# ---------------------------------------------------------------------------
+
+
+def _condition_grid(col: pd.Series, grid_n: int):
+    """Grid of values for a focal ``condition`` variable.
+
+    Returns ``(values, is_numeric)``: a numeric linspace over the observed
+    range, or the ordered categorical levels.
+    """
+    import numpy as _np
+    import pandas as _pd
+
+    if _pd.api.types.is_numeric_dtype(col):
+        lo, hi = float(_np.nanmin(col)), float(_np.nanmax(col))
+        return _np.linspace(lo, hi, grid_n), True
+    levels = list(col.cat.categories) if hasattr(col, "cat") else sorted(_pd.unique(col))
+    return levels, False
+
+
+def plot_predictions(
+    obj: Any,
+    condition: str,
+    *,
+    type: str = "response",
+    grid_n: int = 50,
+    level: float = 0.95,
+    ax: Axes | None = None,
+):
+    """Plot adjusted predictions across the values of a focal variable.
+
+    For each value ``v`` of ``condition`` the variable is set to ``v`` for
+    every observed row (g-computation), the model predicts, and the
+    predictions are averaged -- an *average adjusted prediction* curve.
+    Numeric conditions render as a line with a confidence band; categorical
+    conditions render as points with error bars.
+
+    Parameters
+    ----------
+    obj
+        A fitted model or pymmeans result carrying ``model_info``.
+    condition
+        Name of the focal predictor on the x-axis.
+    type
+        ``"response"`` (default) or ``"link"``.
+    grid_n
+        Number of grid points for a numeric condition.
+    level
+        Confidence level for the band.
+    ax
+        Optional existing Axes.
+
+    Returns
+    -------
+    matplotlib Axes.
+    """
+    import numpy as _np
+    import scipy.stats as _st
+
+    from pymmeans.comparisons import _cf_design, _pred_fn
+    from pymmeans.slopes import _beta_jacobian, _df_value, _get_info, _require_reference_data
+
+    plt = _require_matplotlib()
+    info = _get_info(obj)
+    data = _require_reference_data(info, "plot_predictions")
+    if condition not in data.columns:
+        raise ValueError(f"{condition!r} is not a column of the model data.")
+    pred = _pred_fn(info, type)
+    beta = _np.asarray(info.beta, dtype=float)
+    vcov = _np.asarray(info.vcov, dtype=float)
+    df_value = _df_value(info)
+    crit = (
+        _st.t.isf((1.0 - level) / 2.0, df_value)
+        if _np.isfinite(df_value)
+        else _st.norm.isf((1.0 - level) / 2.0)
+    )
+
+    values, is_numeric = _condition_grid(data[condition], grid_n)
+    ests, ses = [], []
+    n = len(data)
+    for v in values:
+        newval = _np.full(n, v, dtype=float) if is_numeric else v
+        design = _cf_design(info, data, condition, newval)
+
+        def theta(b, _d=design):
+            return [pred(_d @ b).mean()]
+
+        est, jac = _beta_jacobian(theta, beta)
+        ests.append(float(est[0]))
+        ses.append(float(_np.sqrt(max((jac @ vcov @ jac.T)[0, 0], 0.0))))
+    ests = _np.asarray(ests)
+    ses = _np.asarray(ses)
+    lo, hi = ests - crit * ses, ests + crit * ses
+
+    if ax is None:
+        _, ax = plt.subplots()
+    if is_numeric:
+        ax.plot(values, ests, color="C0", lw=2)
+        ax.fill_between(values, lo, hi, color="C0", alpha=0.2)
+    else:
+        xpos = _np.arange(len(values))
+        ax.errorbar(xpos, ests, yerr=[ests - lo, hi - ests], fmt="o", color="C0", capsize=4)
+        ax.set_xticks(xpos)
+        ax.set_xticklabels([str(v) for v in values])
+    ax.set_xlabel(condition)
+    ax.set_ylabel(f"Predicted ({type})")
+    ax.set_title(f"Adjusted predictions over {condition}")
+    return ax
+
+
+def _forest(frame, value_col, label_col, *, ref, xlabel, title, ax):
+    """Shared forest plotter: one point + CI per row of a result frame."""
+    import numpy as _np
+
+    plt = _require_matplotlib()
+    if ax is None:
+        _, ax = plt.subplots()
+    labels = [str(v) for v in frame[label_col]]
+    ypos = _np.arange(len(frame))[::-1]
+    est = frame[value_col].to_numpy(dtype=float)
+    lo = frame["lower_cl"].to_numpy(dtype=float)
+    hi = frame["upper_cl"].to_numpy(dtype=float)
+    ax.errorbar(
+        est, ypos, xerr=[est - lo, hi - est], fmt="o", color="C0", capsize=4
+    )
+    if ref is not None:
+        ax.axvline(ref, color="0.5", ls="--", lw=1)
+    ax.set_yticks(ypos)
+    ax.set_yticklabels(labels)
+    ax.set_xlabel(xlabel)
+    ax.set_title(title)
+    return ax
+
+
+def plot_slopes(
+    obj: Any,
+    var: str,
+    *,
+    by: str | list[str] | None = None,
+    type: str = "response",
+    level: float = 0.95,
+    ax: Axes | None = None,
+):
+    """Forest plot of the average marginal effect of ``var``.
+
+    One point-and-interval per ``by`` group (or a single point for the
+    overall average marginal effect). A dashed reference line marks zero.
+
+    Returns the matplotlib Axes.
+    """
+    from pymmeans.slopes import avg_slopes
+
+    res = avg_slopes(obj, var, by=by, type=type, level=level)
+    frame = res.frame.copy()
+    by_list = [by] if isinstance(by, str) else (list(by) if by else [])
+    if by_list:
+        frame["_label"] = frame[by_list].astype(str).agg(", ".join, axis=1)
+        label_col = "_label"
+    else:
+        frame["_label"] = var
+        label_col = "_label"
+    return _forest(
+        frame, "slope", label_col, ref=0.0,
+        xlabel=f"d E[y]/d {var} ({type})",
+        title=f"Average marginal effect of {var}",
+        ax=ax,
+    )
+
+
+def plot_comparisons(
+    obj: Any,
+    var: str,
+    *,
+    by: str | list[str] | None = None,
+    comparison: str = "difference",
+    type: str = "response",
+    level: float = 0.95,
+    ax: Axes | None = None,
+):
+    """Forest plot of the average counterfactual comparison(s) of ``var``.
+
+    One point-and-interval per contrast (and per ``by`` group). The
+    reference line is 0 for ``difference``/``lnratio``/``lnor``/``lift`` and
+    1 for ``ratio``.
+
+    Returns the matplotlib Axes.
+    """
+    from pymmeans.comparisons import avg_comparisons
+
+    res = avg_comparisons(obj, var, by=by, comparison=comparison, type=type, level=level)
+    frame = res.frame.copy()
+    by_list = [by] if isinstance(by, str) else (list(by) if by else [])
+    parts = ["contrast"] + by_list if by_list else ["contrast"]
+    frame["_label"] = frame[parts].astype(str).agg(", ".join, axis=1)
+    ref = 1.0 if comparison == "ratio" else 0.0
+    return _forest(
+        frame, "estimate", "_label", ref=ref,
+        xlabel=f"{comparison} ({type})",
+        title=f"Average comparison of {var}",
+        ax=ax,
+    )

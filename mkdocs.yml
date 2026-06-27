@@ -146,7 +146,10 @@ nav:
       - imputation (Rubin's rules pooling): api/imputation.md
       - conformal (split + Lei-Candès counterfactual PIs): api/conformal.md
       - double_ml (cross-fit + AIPW double-robust ATE): api/double_ml.md
+      - predictions (avg_predictions / adjusted predictions): api/predictions.md
+      - datagrid (counterfactual reference grids): api/datagrid.md
       - slopes (avg_slopes / marginal effects): api/slopes.md
+      - comparisons (avg_comparisons / counterfactual contrasts): api/comparisons.md
       - hypotheses (nonlinear delta-method tests): api/hypotheses.md
   - vs R emmeans:
       - Performance: PERFORMANCE_REPORT.md

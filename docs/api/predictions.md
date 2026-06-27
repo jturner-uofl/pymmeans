@@ -1,0 +1,3 @@
+# `pymmeans.predictions`
+
+::: pymmeans.predictions

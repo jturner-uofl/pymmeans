@@ -5630,7 +5630,413 @@ if _HAVE_PF:
 
 # ================================================================== §XXIII
 md(r"""
-# Section XXIII — Validation scorecard
+# Section XXIII — Counterfactual comparisons (`avg_comparisons`)
+
+`avg_comparisons` is the discrete-change companion to `avg_slopes`: it
+reports the change in the model's predicted outcome induced by a
+counterfactual change in a focal predictor, averaged over the observed
+sample (g-computation). For a numeric predictor the default is a *centred*
+unit change `mean[h(X(x+1/2)b) - h(X(x-1/2)b)]`; for a categorical
+predictor it is each non-reference level versus the reference. The
+`comparison` argument selects the function applied to the two averaged
+predictions: `difference` (default), `ratio`, `lnratio`, `lnor` (log odds
+ratio), or `lift`.
+
+This section verifies `avg_comparisons` against closed-form identities and,
+where the optional `marginaleffects` package is installed, against its
+`avg_comparisons` directly across all five comparison functions.
+
+* **§XXIII.1** — closed-form identities: on a linear model the
+  `difference` of a numeric predictor over a step `s` equals `s` times the
+  OLS coefficient (and `s` times its standard error); on a logistic GLM the
+  response-scale `difference` equals the centred g-computation prediction
+  difference, and `ratio` equals the ratio of mean predictions.
+* **§XXIII.2** — direct cross-validation against R's `marginaleffects`
+  (Python edition) for `difference`, `ratio`, `lnratio`, `lnor`, and
+  `lift`, plus the categorical level-versus-reference contrasts.
+""")
+
+code(r"""
+# §XXIII.1 — closed-form identities for avg_comparisons.
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import avg_comparisons
+
+_rng_c = np.random.default_rng(20260626)
+_nc = 600
+_df_c = pd.DataFrame({
+    "x": _rng_c.standard_normal(_nc),
+    "z": _rng_c.standard_normal(_nc),
+    "g": pd.Categorical(_rng_c.choice(["A", "B", "C"], _nc)),
+})
+
+# (a) Linear model: difference over step s == s * OLS coefficient (and SE).
+_df_c["y"] = 2.0 + 1.5 * _df_c["x"] - 0.7 * _df_c["z"] + _rng_c.standard_normal(_nc)
+_ols_c = smf.ols("y ~ x + z", _df_c).fit()
+_cmp1 = avg_comparisons(_ols_c, "x", type="link").frame.iloc[0]
+print(f"  linear difference(x, +1) = {_cmp1['estimate']:.10f}  (coef {float(_ols_c.params['x']):.10f})")
+check("XXIII.1", "linear difference over unit step equals the OLS coefficient",
+      abs(float(_cmp1["estimate"]) - float(_ols_c.params["x"])), 1e-9, "structural")
+_cmp3 = avg_comparisons(_ols_c, "x", type="link", step=3.0).frame.iloc[0]
+check("XXIII.1", "linear difference over step 3 equals 3x the coefficient",
+      abs(float(_cmp3["estimate"]) - 3.0 * float(_ols_c.params["x"])), 1e-9, "structural")
+check("XXIII.1", "linear difference SE over step 3 equals 3x the coefficient SE",
+      abs(float(_cmp3["SE"]) - 3.0 * float(_ols_c.bse["x"])), 1e-8, "structural")
+
+# (b) Logistic GLM: response difference == centred g-computation; ratio ==
+#     ratio of mean predictions.
+_eta_c = 0.3 + 0.8 * _df_c["x"] - 0.5 * _df_c["z"]
+_df_c["yb"] = (_rng_c.random(_nc) < 1.0 / (1.0 + np.exp(-_eta_c))).astype(int)
+_glm_c = smf.glm("yb ~ x + z + g", _df_c, family=sm.families.Binomial()).fit()
+_dhi = _df_c.copy(); _dhi["x"] = _df_c["x"] + 0.5
+_dlo = _df_c.copy(); _dlo["x"] = _df_c["x"] - 0.5
+_diff_manual = float((_glm_c.predict(_dhi) - _glm_c.predict(_dlo)).mean())
+_diff_pm = float(avg_comparisons(_glm_c, "x", comparison="difference").frame["estimate"].iloc[0])
+print(f"\\n  logit difference = {_diff_pm:.10f}  (g-computation {_diff_manual:.10f})")
+check("XXIII.1", "logit response difference equals centred g-computation",
+      abs(_diff_pm - _diff_manual), 1e-9, "structural")
+_ratio_manual = float(_glm_c.predict(_dhi).mean() / _glm_c.predict(_dlo).mean())
+_ratio_pm = float(avg_comparisons(_glm_c, "x", comparison="ratio").frame["estimate"].iloc[0])
+check("XXIII.1", "logit ratio equals ratio of mean predictions",
+      abs(_ratio_pm - _ratio_manual), 1e-9, "structural")
+""")
+
+code(r"""
+# §XXIII.2 — cross-validation against marginaleffects (skips cleanly if absent).
+try:
+    import marginaleffects as _me
+    _HAVE_ME = True
+except ImportError:
+    _HAVE_ME = False
+    print("  marginaleffects not installed — skipping §XXIII.2 (optional dependency).")
+
+if _HAVE_ME:
+    for _cmp in ["difference", "ratio", "lnratio", "lnor", "lift"]:
+        _pm = avg_comparisons(_glm_c, "x", comparison=_cmp).frame.iloc[0]
+        _ref = _me.avg_comparisons(_glm_c, variables="x", comparison=_cmp).to_pandas().iloc[0]
+        _de = abs(float(_pm["estimate"]) - float(_ref["estimate"]))
+        _ds = abs(float(_pm["SE"]) - float(_ref["std_error"]))
+        print(f"  x {_cmp:11s}: est |Δ|={_de:.1e}  SE |Δ|={_ds:.1e}")
+        check("XXIII.2", f"avg_comparisons '{_cmp}' estimate matches marginaleffects",
+              _de, 1e-7, "R cross-validation")
+        check("XXIII.2", f"avg_comparisons '{_cmp}' SE matches marginaleffects",
+              _ds, 1e-5, "R cross-validation")
+    # Categorical level-vs-reference contrasts.
+    _pmg = avg_comparisons(_glm_c, "g").frame.set_index("contrast")
+    _refg = _me.avg_comparisons(_glm_c, variables="g").to_pandas().set_index("contrast")
+    for _lvl in ["B - A", "C - A"]:
+        _dge = abs(float(_pmg.loc[_lvl, "estimate"]) - float(_refg.loc[_lvl, "estimate"]))
+        print(f"  g {_lvl}: est |Δ|={_dge:.1e}")
+        check("XXIII.2", f"avg_comparisons categorical '{_lvl}' matches marginaleffects",
+              _dge, 1e-7, "R cross-validation")
+""")
+
+# ================================================================== §XXIV
+md(r"""
+# Section XXIV — Adjusted predictions and plot layer
+
+`avg_predictions` is the third leg of the marginaleffects triad: the
+model's fitted value, averaged over the observed sample (or within `by`
+groups). On the link scale it is exact (`Xbar β`, with standard error
+`sqrt(Xbar V Xbar')`); on the response scale it is a delta-method average
+of the inverse-link predictions. The `plot_predictions` / `plot_slopes` /
+`plot_comparisons` helpers visualise these result frames.
+
+* **§XXIV.1** — closed-form identities: link-scale average prediction
+  equals `Xbar β` (and its exact standard error); the logistic
+  maximum-likelihood calibration identity (mean response prediction equals
+  the observed outcome mean); and, where `marginaleffects` is installed, a
+  direct cross-validation of `avg_predictions`.
+* **§XXIV.2** — the plot layer is exercised structurally: each plotting
+  function returns a populated Matplotlib `Axes`, and the plotted point
+  estimates equal the `avg_slopes` / `avg_comparisons` values they
+  visualise.
+""")
+
+code(r"""
+# §XXIV.1 — avg_predictions closed-form + cross-validation.
+import numpy as np
+import pandas as pd
+import patsy
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import avg_predictions
+
+_rng_p = np.random.default_rng(20260627)
+_np_ = 600
+_df_p = pd.DataFrame({
+    "x": _rng_p.standard_normal(_np_),
+    "z": _rng_p.standard_normal(_np_),
+})
+
+# (a) Linear model, link scale: avg prediction == Xbar @ beta, SE exact.
+_df_p["y"] = 2.0 + 1.5 * _df_p["x"] - 0.7 * _df_p["z"] + _rng_p.standard_normal(_np_)
+_ols_p = smf.ols("y ~ x + z", _df_p).fit()
+_Xp = np.asarray(
+    patsy.build_design_matrices([_ols_p.model.data.design_info], _df_p, return_type="matrix")[0]
+)
+_xbar = _Xp.mean(0)
+_Vp = np.asarray(_ols_p.cov_params())
+_ap = avg_predictions(_ols_p, type="link").frame.iloc[0]
+print(f"  link avg prediction = {_ap['estimate']:.10f}  (Xbar@beta {float(_xbar @ _ols_p.params):.10f})")
+check("XXIV.1", "link-scale average prediction equals Xbar@beta",
+      abs(float(_ap["estimate"]) - float(_xbar @ _ols_p.params)), 1e-10, "structural")
+check("XXIV.1", "link-scale average prediction SE equals sqrt(Xbar V Xbar')",
+      abs(float(_ap["SE"]) - float(np.sqrt(_xbar @ _Vp @ _xbar))), 1e-9, "structural")
+
+# (b) Logistic MLE calibration: mean response prediction == observed mean.
+_eta_p = 0.3 + 0.8 * _df_p["x"] - 0.5 * _df_p["z"]
+_df_p["yb"] = (_rng_p.random(_np_) < 1.0 / (1.0 + np.exp(-_eta_p))).astype(int)
+_glm_p = smf.glm("yb ~ x + z", _df_p, family=sm.families.Binomial()).fit()
+_am = float(avg_predictions(_glm_p, type="response").frame["estimate"].iloc[0])
+print(f"  logit calibration: avg prediction = {_am:.10f}  (observed mean {float(_df_p['yb'].mean()):.10f})")
+check("XXIV.1", "logit response avg prediction equals the observed outcome mean",
+      abs(_am - float(_df_p["yb"].mean())), 1e-8, "structural")
+
+# (c) Cross-validation against marginaleffects (skips cleanly if absent).
+try:
+    import marginaleffects as _me
+    _pm = avg_predictions(_glm_p).frame.iloc[0]
+    _rf = _me.avg_predictions(_glm_p).to_pandas().iloc[0]
+    print(f"  vs marginaleffects: est |Δ|={abs(float(_pm['estimate'])-float(_rf['estimate'])):.1e}  SE |Δ|={abs(float(_pm['SE'])-float(_rf['std_error'])):.1e}")
+    check("XXIV.1", "avg_predictions estimate matches marginaleffects",
+          abs(float(_pm["estimate"]) - float(_rf["estimate"])), 1e-9, "R cross-validation")
+    check("XXIV.1", "avg_predictions SE matches marginaleffects",
+          abs(float(_pm["SE"]) - float(_rf["std_error"])), 1e-5, "R cross-validation")
+except ImportError:
+    print("  marginaleffects not installed — skipping the cross-validation contracts.")
+""")
+
+code(r"""
+# §XXIV.2 — plot layer: structure + value fidelity.
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib.axes import Axes
+from pymmeans import (
+    avg_comparisons, avg_slopes, plot_comparisons, plot_predictions, plot_slopes,
+)
+
+_glm_pl = smf.glm(
+    "yb ~ x + z", _df_p, family=sm.families.Binomial()
+).fit()
+
+_axp = plot_predictions(_glm_pl, "x", grid_n=11)
+check("XXIV.2", "plot_predictions returns a populated Axes (curve + band)",
+      0.0 if (isinstance(_axp, Axes) and len(_axp.get_lines()) >= 1
+              and len(_axp.collections) >= 1) else 1.0, 0.0, "structural")
+
+# The plotted slope point equals the avg_slopes value it visualises.
+_axs = plot_slopes(_glm_pl, "x")
+_plotted_slope = float(_axs.containers[0][0].get_xdata()[0])
+_expect_slope = float(avg_slopes(_glm_pl, "x", type="response").frame["slope"].iloc[0])
+print(f"  plot_slopes point {_plotted_slope:.8f}  == avg_slopes {_expect_slope:.8f}")
+check("XXIV.2", "plot_slopes point estimate equals avg_slopes",
+      abs(_plotted_slope - _expect_slope), 1e-9, "structural")
+
+# The plotted comparison point equals the avg_comparisons value.
+_axc = plot_comparisons(_glm_pl, "x", comparison="difference")
+_plotted_cmp = float(_axc.containers[0][0].get_xdata()[0])
+_expect_cmp = float(avg_comparisons(_glm_pl, "x").frame["estimate"].iloc[0])
+check("XXIV.2", "plot_comparisons point estimate equals avg_comparisons",
+      abs(_plotted_cmp - _expect_cmp), 1e-9, "structural")
+""")
+
+# ================================================================== §XXV
+md(r"""
+# Section XXV — Reference grids and flexible change specifications
+
+The `marginaleffects` triad can be evaluated at *specific* covariate values
+rather than averaged over the observed sample. `datagrid` builds a small
+counterfactual grid — named variables are crossed, every other predictor is
+held at a typical value (mean for numeric, mode for categorical) — and the
+grid is passed to `avg_predictions` / `avg_slopes` / `avg_comparisons` via
+`newdata=`. Numeric comparison contrasts also accept richer change
+specifications: a centred standard-deviation step (`"sd"`, `"2sd"`), an
+interquartile change (`"iqr"`), a min-to-max change (`"minmax"`), an
+absolute `(lo, hi)` pair, or a per-variable dictionary; and the comparison
+function may be any callable.
+
+* **§XXV.1** — `datagrid` holds unspecified numerics at their mean and
+  factors at their mode, and crosses the supplied values; `avg_predictions`
+  with `newdata=` equals the plain average of the model's predictions over
+  that grid.
+* **§XXV.2** — the `sd` / `2sd` / `iqr` / `minmax` / `(lo, hi)` change specs
+  match closed-form g-computation and, where installed, R's
+  `marginaleffects` to machine precision.
+""")
+
+code(r"""
+# §XXV.1 — datagrid + newdata.
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import avg_comparisons, avg_predictions, datagrid
+
+_rng_g = np.random.default_rng(20260627)
+_ng = 600
+_df_g = pd.DataFrame({
+    "x": _rng_g.standard_normal(_ng) * 2 + 1,
+    "z": _rng_g.standard_normal(_ng),
+    "g": pd.Categorical(_rng_g.choice(["A", "B", "C"], _ng)),
+})
+_eta_g = 0.3 + 0.5 * _df_g["x"] - 0.5 * _df_g["z"]
+_df_g["yb"] = (_rng_g.random(_ng) < 1.0 / (1.0 + np.exp(-_eta_g))).astype(int)
+_glm_g = smf.glm("yb ~ x + z + g", _df_g, family=sm.families.Binomial()).fit()
+
+_grid = datagrid(_glm_g, x=[0, 1, 2])
+print("  datagrid(x=[0,1,2]) ->", _grid.shape[0], "rows; z held at mean,",
+      "g at mode")
+check("XXV.1", "datagrid holds unspecified numeric z at its mean",
+      abs(float(_grid["z"].iloc[0]) - float(_df_g["z"].mean())), 1e-10, "structural")
+check("XXV.1", "datagrid holds unspecified factor g at its mode",
+      0.0 if (_grid["g"].iloc[0] == _df_g["g"].mode().iloc[0]) else 1.0, 0.0, "structural")
+# avg_predictions over the grid == plain mean of predict() over the grid.
+_apg = float(avg_predictions(_glm_g, newdata=_grid).frame["estimate"].iloc[0])
+_manual_g = float(_glm_g.predict(_grid).mean())
+print(f"  avg_predictions(newdata=grid) = {_apg:.10f}  (mean predict over grid {_manual_g:.10f})")
+check("XXV.1", "avg_predictions(newdata=grid) equals the grid prediction mean",
+      abs(_apg - _manual_g), 1e-9, "structural")
+""")
+
+code(r"""
+# §XXV.2 — richer numeric change specs.
+_x = _df_g["x"].to_numpy()
+_sd = float(np.std(_x, ddof=1))
+_spec_endpoints = {
+    "sd": (_x - _sd / 2.0, _x + _sd / 2.0),
+    "2sd": (_x - _sd, _x + _sd),
+    "iqr": (np.quantile(_x, 0.25), np.quantile(_x, 0.75)),
+    "minmax": (_x.min(), _x.max()),
+}
+for _spec, (_lo, _hi) in _spec_endpoints.items():
+    _dl = _df_g.copy(); _dl["x"] = _lo
+    _dh = _df_g.copy(); _dh["x"] = _hi
+    _manual = float((_glm_g.predict(_dh) - _glm_g.predict(_dl)).mean())
+    _pm = float(avg_comparisons(_glm_g, variables={"x": _spec}).frame["estimate"].iloc[0])
+    print(f"  spec {_spec:7s}: pymmeans {_pm:.8f}  g-computation {_manual:.8f}")
+    check("XXV.2", f"comparison change spec '{_spec}' matches g-computation",
+          abs(_pm - _manual), 1e-9, "structural")
+
+try:
+    import marginaleffects as _me
+    for _spec in ["sd", "2sd", "iqr", "minmax", [0.0, 1.0]]:
+        _pm = avg_comparisons(_glm_g, variables={"x": _spec}).frame.iloc[0]
+        _rf = _me.avg_comparisons(_glm_g, variables={"x": _spec}).to_pandas().iloc[0]
+        check("XXV.2", f"comparison change spec '{_spec}' estimate matches marginaleffects",
+              abs(float(_pm["estimate"]) - float(_rf["estimate"])), 1e-7, "R cross-validation")
+        check("XXV.2", f"comparison change spec '{_spec}' SE matches marginaleffects",
+              abs(float(_pm["SE"]) - float(_rf["std_error"])), 1e-5, "R cross-validation")
+except ImportError:
+    print("  marginaleffects not installed — skipping the cross-validation contracts.")
+""")
+
+# ================================================================== §XXVI
+md(r"""
+# Section XXVI — Cross-estimate hypotheses and back-transforms
+
+The `hypothesis=` argument tests linear combinations of a result's rows --
+for example, whether the marginal effect of a predictor differs across
+groups -- with an *exact* delta-method standard error, because each row's
+Jacobian with respect to the coefficients is retained and the contrast
+matrix `L` is applied as `sqrt(diag(L J V J' L'))`. The `transform=`
+argument back-transforms the point estimate and confidence limits (e.g.
+exponentiating a log-odds-ratio contrast), matching `marginaleffects` and
+`emmeans`.
+
+* **§XXVI.1** — `hypothesis="pairwise"` point estimates equal the
+  differences of the per-group estimates, and the contrast standard errors
+  equal an independently reconstructed analytic delta-method covariance.
+* **§XXVI.2** — `transform=` exponentiation maps the estimate and interval
+  endpoints exactly, and matches R's `marginaleffects` where installed.
+""")
+
+code(r"""
+# §XXVI.1 — hypothesis= cross-estimate contrasts with exact delta-method SE.
+import numpy as np
+import pandas as pd
+import patsy
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import avg_slopes
+
+_rng_h = np.random.default_rng(20260627)
+_nh = 600
+_df_h = pd.DataFrame({
+    "x": _rng_h.standard_normal(_nh),
+    "g": pd.Categorical(_rng_h.choice(["A", "B", "C"], _nh)),
+})
+_slope = _df_h["g"].map({"A": 0.5, "B": 1.5, "C": 2.5}).astype(float)
+_df_h["yb"] = (_rng_h.random(_nh) < 1.0 / (1.0 + np.exp(-(0.2 + _df_h["x"] * _slope)))).astype(int)
+_fit_h = smf.glm("yb ~ x * g", _df_h, family=sm.families.Binomial()).fit()
+
+_base = avg_slopes(_fit_h, "x", by="g", type="response").frame.set_index("g")["slope"]
+_pw = avg_slopes(_fit_h, "x", by="g", type="response", hypothesis="pairwise").frame.set_index("hypothesis")
+# point estimates equal the group differences
+check("XXVI.1", "hypothesis='pairwise' A-B equals the group slope difference",
+      abs(float(_pw.loc["A - B", "slope"]) - float(_base["A"] - _base["B"])), 1e-9, "structural")
+
+# Independent analytic delta-method covariance of the three group slopes.
+_b = np.asarray(_fit_h.params); _V = np.asarray(_fit_h.cov_params())
+_di = _fit_h.model.data.design_info
+_X = np.asarray(patsy.build_design_matrices([_di], _df_h, return_type="matrix")[0])
+_hh = 1e-6
+_Ls = (
+    np.asarray(patsy.build_design_matrices([_di], _df_h.assign(x=_df_h["x"] + _hh), return_type="matrix")[0])
+    - np.asarray(patsy.build_design_matrices([_di], _df_h.assign(x=_df_h["x"] - _hh), return_type="matrix")[0])
+) / (2 * _hh)
+
+def _theta_h(_bb):
+    _p = 1.0 / (1.0 + np.exp(-(_X @ _bb)))
+    _rs = _p * (1 - _p) * (_Ls @ _bb)
+    return np.array([_rs[(_df_h["g"] == lv).to_numpy()].mean() for lv in ["A", "B", "C"]])
+
+_J = np.zeros((3, len(_b)))
+for _k in range(len(_b)):
+    _s = 1e-6 * max(1.0, abs(_b[_k]))
+    _bp = _b.copy(); _bp[_k] += _s
+    _bm = _b.copy(); _bm[_k] -= _s
+    _J[:, _k] = (_theta_h(_bp) - _theta_h(_bm)) / (2 * _s)
+_C = _J @ _V @ _J.T
+for _i, _j, _lab in [(0, 1, "A - B"), (0, 2, "A - C"), (1, 2, "B - C")]:
+    _ell = np.zeros(3); _ell[_i] = 1.0; _ell[_j] = -1.0
+    _truth_se = float(np.sqrt(_ell @ _C @ _ell.T))
+    print(f"  {_lab}: pymmeans SE {float(_pw.loc[_lab, 'SE']):.8f}  analytic {_truth_se:.8f}")
+    check("XXVI.1", f"hypothesis '{_lab}' SE matches independent analytic delta method",
+          abs(float(_pw.loc[_lab, "SE"]) - _truth_se), 1e-7, "structural")
+""")
+
+code(r"""
+# §XXVI.2 — transform= back-transform of estimate + interval.
+from pymmeans import avg_comparisons
+
+_nt = avg_comparisons(_fit_h, "x", comparison="lnratio").frame.iloc[0]
+_tr = avg_comparisons(_fit_h, "x", comparison="lnratio", transform=np.exp).frame.iloc[0]
+check("XXVI.2", "transform=exp maps the point estimate exactly",
+      abs(float(_tr["estimate"]) - float(np.exp(_nt["estimate"]))), 1e-9, "structural")
+check("XXVI.2", "transform=exp maps the lower interval endpoint exactly",
+      abs(float(_tr["lower_cl"]) - float(np.exp(_nt["lower_cl"]))), 1e-9, "structural")
+check("XXVI.2", "transform=exp maps the upper interval endpoint exactly",
+      abs(float(_tr["upper_cl"]) - float(np.exp(_nt["upper_cl"]))), 1e-9, "structural")
+
+try:
+    import marginaleffects as _me
+    _ref = _me.avg_comparisons(_fit_h, variables="x", comparison="lnratio", transform=np.exp).to_pandas().iloc[0]
+    print(f"  transform vs marginaleffects: est |Δ|={abs(float(_tr['estimate'])-float(_ref['estimate'])):.1e}")
+    check("XXVI.2", "transform=exp estimate matches marginaleffects",
+          abs(float(_tr["estimate"]) - float(_ref["estimate"])), 1e-7, "R cross-validation")
+    check("XXVI.2", "transform=exp interval matches marginaleffects",
+          abs(float(_tr["lower_cl"]) - float(_ref["conf_low"]))
+          + abs(float(_tr["upper_cl"]) - float(_ref["conf_high"])), 1e-6, "R cross-validation")
+except ImportError:
+    print("  marginaleffects not installed — skipping the cross-validation contracts.")
+""")
+
+# ================================================================== §XXVII
+md(r"""
+# Section XXVII — Validation scorecard
 """)
 
 code(r"""

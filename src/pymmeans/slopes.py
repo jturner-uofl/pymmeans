@@ -45,6 +45,7 @@ References
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from typing import Any
 
@@ -180,6 +181,35 @@ def _df_value(info: Any) -> float:
     )
 
 
+def _groups_for(
+    data: pd.DataFrame, by_list: list[str]
+) -> list[tuple[tuple, np.ndarray]]:
+    """Row groups in factor-level order (emmeans convention).
+
+    Returns ``[(key_tuple, boolean_mask), ...]`` ordered by the Cartesian
+    product of each ``by`` column's level order (categories for a
+    Categorical, sorted unique otherwise), keeping only non-empty cells.
+    A single overall group is returned when ``by_list`` is empty.
+    """
+    if not by_list:
+        return [((), np.ones(len(data), dtype=bool))]
+    levels = []
+    for c in by_list:
+        col = data[c]
+        levels.append(
+            list(col.cat.categories) if hasattr(col, "cat") else sorted(pd.unique(col))
+        )
+    arrays = {c: data[c].to_numpy() for c in by_list}
+    groups: list[tuple[tuple, np.ndarray]] = []
+    for combo in itertools.product(*levels):
+        mask = np.ones(len(data), dtype=bool)
+        for c, v in zip(by_list, combo, strict=True):
+            mask &= arrays[c] == v
+        if mask.any():
+            groups.append((combo, mask))
+    return groups
+
+
 def _beta_jacobian(
     theta: Any, beta: np.ndarray, *, rel_step: float = 1e-6
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -207,6 +237,132 @@ def _beta_jacobian(
     return g0, jac
 
 
+def _wald_named(
+    est: np.ndarray, se: np.ndarray, df_value: float, level: float, value_name: str
+) -> dict[str, np.ndarray]:
+    """Wald columns with a configurable estimate-column name."""
+    cols = _wald_frame(est, se, df_value, level)
+    cols[value_name] = cols.pop("slope")
+    # Keep the estimate column first.
+    return {value_name: cols[value_name], **{k: v for k, v in cols.items() if k != value_name}}
+
+
+def _hypothesis_matrix(
+    hypothesis: Any, labels: list[str]
+) -> tuple[np.ndarray, list[str]]:
+    """Build a contrast matrix ``L`` (m x K) and labels from a spec.
+
+    String specs (emmeans conventions): ``"pairwise"``, ``"revpairwise"``,
+    ``"reference"`` / ``"trt.vs.ctrl"``, ``"sequential"`` / ``"consec"``.
+    A numeric array is used directly as ``L``.
+    """
+    k = len(labels)
+    if isinstance(hypothesis, str):
+        h = hypothesis.lower()
+        rows: list[np.ndarray] = []
+        hlabels: list[str] = []
+
+        def _row(i: int, j: int) -> np.ndarray:
+            r = np.zeros(k)
+            r[i] = 1.0
+            r[j] = -1.0
+            return r
+
+        if h == "pairwise":
+            for i in range(k):
+                for j in range(i + 1, k):
+                    rows.append(_row(i, j)); hlabels.append(f"{labels[i]} - {labels[j]}")
+        elif h == "revpairwise":
+            for i in range(k):
+                for j in range(i + 1, k):
+                    rows.append(_row(j, i)); hlabels.append(f"{labels[j]} - {labels[i]}")
+        elif h in ("reference", "trt.vs.ctrl"):
+            for i in range(1, k):
+                rows.append(_row(i, 0)); hlabels.append(f"{labels[i]} - {labels[0]}")
+        elif h in ("sequential", "consec"):
+            for i in range(k - 1):
+                rows.append(_row(i + 1, i)); hlabels.append(f"{labels[i + 1]} - {labels[i]}")
+        else:
+            raise ValueError(
+                f"unknown hypothesis {hypothesis!r}; expected 'pairwise', "
+                "'revpairwise', 'reference', 'sequential', or a contrast matrix."
+            )
+        if not rows:
+            raise ValueError(
+                f"hypothesis {hypothesis!r} needs at least 2 estimates to "
+                f"contrast; got {k}."
+            )
+        return np.asarray(rows), hlabels
+    mat = np.atleast_2d(np.asarray(hypothesis, dtype=float))
+    if mat.shape[1] != k:
+        raise ValueError(
+            f"hypothesis matrix has {mat.shape[1]} columns but there are {k} "
+            f"estimates to contrast."
+        )
+    return mat, [f"h{i + 1}" for i in range(mat.shape[0])]
+
+
+def _apply_transform(
+    frame: pd.DataFrame, transform: Any, value_name: str
+) -> pd.DataFrame:
+    """Back-transform estimate + CI endpoints; drop the (now ill-defined) SE.
+
+    Mirrors marginaleffects / emmeans: a monotone ``transform`` is applied
+    to the point estimate and the confidence limits, and the standard error
+    / test statistic / p-value are set to NaN on the transformed scale.
+    """
+    out = frame.copy()
+    out[value_name] = transform(out[value_name].to_numpy(dtype=float))
+    out["lower_cl"] = transform(out["lower_cl"].to_numpy(dtype=float))
+    out["upper_cl"] = transform(out["upper_cl"].to_numpy(dtype=float))
+    for c in ("SE", "t_ratio", "p_value"):
+        if c in out.columns:
+            out[c] = np.nan
+    return out
+
+
+def _assemble_marginal(
+    est: np.ndarray,
+    jac: np.ndarray,
+    vcov: np.ndarray,
+    *,
+    id_frame: pd.DataFrame,
+    labels: list[str],
+    value_name: str,
+    df_value: float,
+    level: float,
+    hypothesis: Any,
+    transform: Any,
+) -> pd.DataFrame:
+    """Finalise a marginal-effect frame, applying hypothesis / transform.
+
+    ``jac`` is the (K x p) Jacobian of the K estimates w.r.t. ``beta`` so a
+    ``hypothesis`` contrast ``L`` gets an exact delta-method standard error
+    ``sqrt(diag(L J V J^T L^T))``.
+    """
+    est = np.asarray(est, dtype=float)
+    jac = np.asarray(jac, dtype=float)
+    if hypothesis is not None:
+        lmat, hlabels = _hypothesis_matrix(hypothesis, labels)
+        new_est = lmat @ est
+        full_cov = jac @ vcov @ jac.T
+        new_cov = lmat @ full_cov @ lmat.T
+        se = np.sqrt(np.clip(np.diag(new_cov), 0.0, None))
+        cols = _wald_named(new_est, se, df_value, level, value_name)
+        frame = pd.DataFrame({"hypothesis": hlabels})
+        for c, v in cols.items():
+            frame[c] = v
+    else:
+        se = np.sqrt(np.clip(np.diag(jac @ vcov @ jac.T), 0.0, None))
+        cols = _wald_named(est, se, df_value, level, value_name)
+        frame = id_frame.reset_index(drop=True).copy()
+        for c, v in cols.items():
+            frame[c] = v
+    if transform is not None:
+        frame = _apply_transform(frame, transform, value_name)
+    return frame
+
+
 def avg_slopes(
     obj: Any,
     var: str,
@@ -215,8 +371,11 @@ def avg_slopes(
     type: str = "link",
     level: float = 0.95,
     h: float = _DEFAULT_H,
+    newdata: pd.DataFrame | None = None,
+    hypothesis: Any = None,
+    transform: Any = None,
 ) -> SlopesResult:
-    """Average marginal effect of ``var`` over the observed sample.
+    """Average marginal effect of ``var`` over a sample or grid.
 
     The slope of the model w.r.t. ``var`` is evaluated at every observed
     row and averaged, optionally within levels of a ``by`` factor.
@@ -258,7 +417,9 @@ def avg_slopes(
         raise ValueError(f"level must be in (0, 1); got {level!r}.")
 
     info = _get_info(obj)
-    data = _require_reference_data(info, "avg_slopes")
+    data = (
+        newdata if newdata is not None else _require_reference_data(info, "avg_slopes")
+    )
     if var not in data.columns:
         raise ValueError(f"{var!r} is not a column of the model data.")
     _require_numeric_var(data, var)
@@ -269,24 +430,14 @@ def avg_slopes(
 
     L_slope = _slope_design(info, data, var, h)  # (n, p)
 
-    # Build row groups: overall, or partitioned by the `by` factor(s).
-    if by_list:
-        keys = pd.MultiIndex.from_frame(data[by_list].astype(object))
-        unique_keys = list(dict.fromkeys(keys))
-        groups = [(k, np.asarray(keys == k)) for k in unique_keys]
-    else:
-        groups = [((), np.ones(len(data), dtype=bool))]
-
+    # Build row groups (factor-level order): overall, or by the `by` factor(s).
+    groups = _groups_for(data, by_list)
     df_value = _df_value(info)
 
     if type == "link":
-        # Exact: averaged slope-design row, L_avg @ beta, sqrt(L_avg V L_avg^T).
-        ests = np.empty(len(groups))
-        ses = np.empty(len(groups))
-        for gi, (_k, mask) in enumerate(groups):
-            L_avg = L_slope[mask].mean(axis=0, keepdims=True)
-            ests[gi] = float((L_avg @ beta)[0])
-            ses[gi] = float(np.sqrt((L_avg @ vcov @ L_avg.T)[0, 0]))
+        # Exact: averaged slope-design row gives the (K x p) Jacobian.
+        jac = np.stack([L_slope[mask].mean(axis=0) for _k, mask in groups])
+        ests = jac @ beta
     else:
         # Response scale: theta(beta) = mean_i h'(X_i beta) (L_slope_i beta).
         # Non-linear in beta -> delta method with a finite-difference Jacobian.
@@ -304,20 +455,17 @@ def avg_slopes(
             row_slope = dh * (L_slope @ b)
             return np.array([row_slope[mask].mean() for _k, mask in groups])
 
-        ests, J = _beta_jacobian(theta, beta)
-        cov = J @ vcov @ J.T
-        ses = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+        ests, jac = _beta_jacobian(theta, beta)
 
-    cols = _wald_frame(ests, ses, df_value, level)
-    # Assemble the by-factor columns first so they define the row index,
-    # then the var label, then the Wald columns.
-    frame_data: dict[str, Any] = {}
-    for i, name in enumerate(by_list):
-        frame_data[name] = [k[i] for k, _m in groups]
-    frame_data["var"] = [var] * len(groups)
-    frame_data.update(cols)
-    frame = pd.DataFrame(frame_data)
-
+    id_frame = pd.DataFrame({name: [k[i] for k, _m in groups] for i, name in enumerate(by_list)})
+    id_frame["var"] = [var] * len(groups)
+    labels = (
+        [", ".join(str(x) for x in k) for k, _m in groups] if by_list else [var]
+    )
+    frame = _assemble_marginal(
+        ests, jac, vcov, id_frame=id_frame, labels=labels, value_name="slope",
+        df_value=df_value, level=level, hypothesis=hypothesis, transform=transform,
+    )
     return SlopesResult(frame=frame, var=var, type=type, level=level)
 
 
@@ -328,6 +476,7 @@ def slopes(
     type: str = "link",
     level: float = 0.95,
     h: float = _DEFAULT_H,
+    newdata: pd.DataFrame | None = None,
 ) -> SlopesResult:
     """Per-observation marginal effects of ``var``.
 
@@ -348,7 +497,9 @@ def slopes(
         raise ValueError(f"level must be in (0, 1); got {level!r}.")
 
     info = _get_info(obj)
-    data = _require_reference_data(info, "slopes")
+    data = (
+        newdata if newdata is not None else _require_reference_data(info, "slopes")
+    )
     if var not in data.columns:
         raise ValueError(f"{var!r} is not a column of the model data.")
     _require_numeric_var(data, var)

@@ -25,14 +25,14 @@ abstract: >
   package matches R emmeans numerically to floating-point precision
   on its deterministic surface (134 direct cross-validation
   contracts) and is 1.6-4.1x faster on the four most-used code
-  paths. The package ships 1037 unit tests at 87% line coverage and
-  a 251-contract narrative validation notebook with zero failures.
+  paths. The package ships a comprehensive automated test suite at 87% line coverage and
+  a 311-contract narrative validation notebook with zero failures.
 authors:
   - family-names: Turner
     given-names: Jason S.
     email: jason.s.turner@gmail.com
     affiliation: "Independent Researcher"
-version: 0.7.0
+version: 0.11.0
 date-released: 2026-06-26
 license: GPL-3.0-or-later
 repository-code: "https://github.com/jturner-uofl/pymmeans"

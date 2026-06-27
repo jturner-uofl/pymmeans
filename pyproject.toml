@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymmeans"
-version = "0.7.0"
+version = "0.11.0"
 description = "Estimated marginal means for Python — a native port of R's emmeans."
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -67,6 +67,11 @@ dev = [
     # via ``pytest.importorskip``. Used only for coefficient-level
     # operations (``hypotheses``) on absorbed-FE models.
     "pyfixest>=0.18",
+    # marginaleffects is the reference implementation for the
+    # avg_comparisons / avg_slopes cross-validation tests
+    # (``tests/test_comparisons.py``); skipped via ``importorskip`` when
+    # absent. Not a runtime dependency.
+    "marginaleffects>=0.0.10",
 ]
 bench = ["pytest-benchmark>=4.0"]
 docs = [

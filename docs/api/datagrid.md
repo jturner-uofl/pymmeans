@@ -1,0 +1,3 @@
+# `pymmeans.datagrid`
+
+::: pymmeans.datagrid

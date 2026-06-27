@@ -5,6 +5,125 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-06-27
+
+### Added
+
+- `hypothesis=` argument on `avg_predictions` / `avg_slopes` /
+  `avg_comparisons` — test linear combinations of the result's rows (e.g.
+  whether a marginal effect differs across groups) with an *exact*
+  delta-method standard error. Each row's Jacobian with respect to the
+  coefficients is retained, so a contrast matrix `L` is applied as
+  `sqrt(diag(L J V Jᵀ Lᵀ))`. Accepts the emmeans-style shortcuts
+  `"pairwise"`, `"revpairwise"`, `"reference"` / `"trt.vs.ctrl"`,
+  `"sequential"` / `"consec"`, or an explicit numeric contrast matrix. The
+  contrast SEs match an independently reconstructed analytic delta method
+  to machine precision.
+- `transform=` argument on the same functions — back-transform the point
+  estimate and confidence limits (e.g. exponentiating a log-odds-ratio
+  contrast), with the standard error set to NaN on the transformed scale,
+  matching `marginaleffects` and `emmeans`.
+
+### Changed
+
+- `by=` groups in `avg_predictions` / `avg_slopes` / `avg_comparisons` are
+  now returned in factor-level order (categories for a Categorical, sorted
+  otherwise), matching `emmeans`, rather than data-appearance order. Row
+  *values* are unchanged.
+
+### Documentation
+
+- New validation-notebook Section XXVI with `hypothesis=` (exact contrast
+  SE vs independent analytic delta) and `transform=` (vs `marginaleffects`)
+  contracts; the executed notebook records 311 contracts (165
+  cross-validation + 104 structural + 42 Monte-Carlo), zero failures.
+
+## [0.10.0] — 2026-06-27
+
+### Added
+
+- `datagrid()` — build a counterfactual reference grid to pass as
+  `newdata=`. Named variables are crossed (Cartesian product); every other
+  predictor is held at a typical value (mean for numeric, mode for
+  categorical), matching `marginaleffects.datagrid`.
+- `newdata=` argument on `avg_predictions` / `predictions` / `avg_slopes` /
+  `slopes` / `avg_comparisons` / `comparisons` — evaluate the estimand at a
+  supplied grid (e.g. from `datagrid`) instead of averaging over the
+  observed sample.
+- Richer `avg_comparisons` / `comparisons` change grammar. `variables` now
+  accepts a dict `{name: spec}` for per-variable change specifications; a
+  numeric `spec` may be a number (centred step), `"sd"` / `"2sd"` (centred
+  SD step), `"iqr"` (Q1→Q3), `"minmax"` (min→max), or a `(lo, hi)` pair; a
+  categorical `spec` is the explicit list of levels to contrast. The
+  `comparison` argument additionally accepts any callable `(hi, lo) ->
+  value`. All specs reproduce `marginaleffects` (estimate and standard
+  error) to machine precision, verified in-process.
+
+### Documentation
+
+- New validation-notebook Section XXV with `datagrid` / `newdata` and
+  change-spec contracts; the executed notebook records 302 contracts (163
+  cross-validation + 97 structural + 42 Monte-Carlo), zero failures.
+- New API page for the `datagrid` module.
+
+## [0.9.0] — 2026-06-27
+
+### Added
+
+- `avg_predictions()` / `predictions()` — average adjusted predictions, the
+  third leg of the marginaleffects triad. The model's fitted value on the
+  response or link scale, averaged over the observed sample or within `by`
+  groups, with a delta-method standard error. On the link scale the result
+  is exact (`X̄β`, SE `√(X̄VX̄ᵀ)`); for a logistic MLE fit the response-scale
+  average prediction equals the observed outcome mean (score-equation
+  calibration). Estimate and SE reproduce `marginaleffects.avg_predictions`
+  to machine precision (committed `importorskip` cross-validation).
+- `plot_predictions()` / `plot_slopes()` / `plot_comparisons()` — a
+  plot-ready visual layer over the prediction/slope/comparison frames.
+  `plot_predictions` draws an average-adjusted-prediction curve (numeric
+  condition: line + confidence band; categorical: points + error bars) by
+  g-computation over a grid of the focal variable; `plot_slopes` and
+  `plot_comparisons` are forest plots of the averaged estimates with
+  confidence intervals and a reference line. Matplotlib is imported lazily
+  (the `[plot]` extra); the plotted point estimates equal the
+  `avg_slopes` / `avg_comparisons` values they visualise.
+
+### Documentation
+
+- New validation-notebook Section XXIV with `avg_predictions` closed-form,
+  calibration, and cross-validation contracts plus plot-layer structural
+  checks; the executed notebook records 285 contracts (153
+  cross-validation + 90 structural + 42 Monte-Carlo), zero failures.
+- New API page for the `predictions` module.
+
+## [0.8.0] — 2026-06-26
+
+### Added
+
+- `avg_comparisons()` / `comparisons()` — counterfactual comparisons
+  (g-computation), the discrete-change companion to `avg_slopes`. For a
+  numeric predictor the default is a centred unit change
+  `mean[h(X(x+1/2)β) − h(X(x−1/2)β)]`; for a categorical predictor, each
+  non-reference level versus the reference. The `comparison=` argument
+  selects the function applied to the two averaged predictions:
+  `difference` (default), `ratio`, `lnratio`, `lnor` (log odds ratio), or
+  `lift`. Standard errors are the delta method (shared `_beta_jacobian`
+  machinery). On a linear model the difference over a step `s` equals `s`
+  times the OLS coefficient exactly; on a GLM all five comparison
+  functions reproduce `marginaleffects.avg_comparisons` (estimate and
+  standard error) to machine precision, verified in-process via a
+  committed `importorskip` cross-validation test. Closes the last
+  substantive capability gap against `marginaleffects`.
+
+### Documentation
+
+- New validation-notebook Section XXIII with closed-form and
+  marginaleffects cross-validation contracts for `avg_comparisons`; the
+  executed notebook records 277 contracts (151 cross-validation + 84
+  structural + 42 Monte-Carlo), zero failures.
+- New API page for the `comparisons` module; `marginaleffects` added as an
+  optional test dependency.
+
 ## [0.7.0] — 2026-06-26
 
 ### Added

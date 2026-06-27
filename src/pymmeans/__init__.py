@@ -10,6 +10,11 @@ from pymmeans.adapters import (
 from pymmeans.adjustments import adjust_pvalues
 from pymmeans.aft import from_aft
 from pymmeans.cld import cld
+from pymmeans.comparisons import (
+    ComparisonsResult,
+    avg_comparisons,
+    comparisons,
+)
 from pymmeans.conformal import (
     ConformalCounterfactualResult,
     ConformalPIResult,
@@ -27,6 +32,7 @@ from pymmeans.contrasts import (
     rbind,
     register_contrast_method,
 )
+from pymmeans.datagrid import datagrid
 from pymmeans.diagnostics import Check, HealthReport, health_check
 from pymmeans.double_ml import AIPWResult, aipw_ate, cross_fit_ml_emmeans
 from pymmeans.emmeans import EMMResult, emmeans
@@ -72,13 +78,25 @@ from pymmeans.pbktest import (
     satmodcomp,
 )
 from pymmeans.pbmodcomp import PBmodcompResult, pbmodcomp
-from pymmeans.plotting import emmip, plot, pwpp
+from pymmeans.plotting import (
+    emmip,
+    plot,
+    plot_comparisons,
+    plot_predictions,
+    plot_slopes,
+    pwpp,
+)
 from pymmeans.posterior import (
     PosteriorInfo,
     from_arviz,
     from_pymc,
     posterior_emm_summary,
     posterior_emmeans,
+)
+from pymmeans.predictions import (
+    PredictionsResult,
+    avg_predictions,
+    predictions,
 )
 from pymmeans.pwpm import pwpm
 from pymmeans.qdrg import emmobj, qdrg
@@ -145,7 +163,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.7.0"
+__version__ = "0.11.0"
 
 __all__ = [
     "CONTRAST_METHODS",
@@ -153,6 +171,7 @@ __all__ = [
     "AIPWResult",
     "BoundaryFitError",
     "Check",
+    "ComparisonsResult",
     "ConformalCounterfactualResult",
     "ConformalPIResult",
     "ContrastResult",
@@ -173,6 +192,7 @@ __all__ = [
     "PBmodcompResult",
     "PooledImputationResult",
     "PosteriorInfo",
+    "PredictionsResult",
     "PyFixestAdapter",
     "RefGrid",
     "SlopesResult",
@@ -186,14 +206,18 @@ __all__ = [
     "apply_kenward_roger",
     "apply_satterthwaite",
     "as_r_frame",
+    "avg_comparisons",
+    "avg_predictions",
     "avg_slopes",
     "bootstrap_ci",
     "cld",
     "comb_facs",
+    "comparisons",
     "confint",
     "conformal_counterfactual_pi",
     "contrast",
     "cross_fit_ml_emmeans",
+    "datagrid",
     "ddf_lb",
     "design_corrected_vcov",
     "detect_transform",
@@ -244,9 +268,13 @@ __all__ = [
     "permutation_test",
     "permute_levels",
     "plot",
+    "plot_comparisons",
+    "plot_predictions",
+    "plot_slopes",
     "pool_imputed",
     "posterior_emm_summary",
     "posterior_emmeans",
+    "predictions",
     "pwpm",
     "pwpp",
     "qdrg",
