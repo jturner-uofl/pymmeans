@@ -3,6 +3,7 @@
 from pymmeans.adapters import (
     LinearmodelsAdapter,
     ModelAdapter,
+    PyFixestAdapter,
     StatsmodelsAdapter,
     register_adapter,
 )
@@ -36,6 +37,7 @@ from pymmeans.grid_ops import (
     permute_levels,
     split_fac,
 )
+from pymmeans.hypotheses import HypothesisResult, hypotheses
 from pymmeans.imputation import PooledImputationResult, pool_imputed
 from pymmeans.joint import eta_squared, joint_tests
 from pymmeans.ml import (
@@ -89,6 +91,7 @@ from pymmeans.satterthwaite import (
     satterthwaite_df,
 )
 from pymmeans.sensitivity import EValueResult, e_value
+from pymmeans.slopes import SlopesResult, avg_slopes, slopes
 from pymmeans.summary import bootstrap_ci, permutation_test
 from pymmeans.summary_layer import (
     as_r_frame,
@@ -113,6 +116,7 @@ from pymmeans.utils import (
     from_fitted,
     from_glmgam,
     from_linearmodels,
+    from_pyfixest,
     from_statsmodels,
 )
 
@@ -141,7 +145,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "CONTRAST_METHODS",
@@ -157,6 +161,7 @@ __all__ = [
     "EmmList",
     "FtestResult",
     "HealthReport",
+    "HypothesisResult",
     "KRDiagnostics",
     "LinearmodelsAdapter",
     "MLEMMResult",
@@ -168,7 +173,9 @@ __all__ = [
     "PBmodcompResult",
     "PooledImputationResult",
     "PosteriorInfo",
+    "PyFixestAdapter",
     "RefGrid",
+    "SlopesResult",
     "StatsmodelsAdapter",
     "SurveyDesign",
     "Transform",
@@ -179,6 +186,7 @@ __all__ = [
     "apply_kenward_roger",
     "apply_satterthwaite",
     "as_r_frame",
+    "avg_slopes",
     "bootstrap_ci",
     "cld",
     "comb_facs",
@@ -205,6 +213,7 @@ __all__ = [
     "from_linearmodels",
     "from_multivariate",
     "from_predict",
+    "from_pyfixest",
     "from_pymc",
     "from_statsmodels",
     "from_survey",
@@ -212,6 +221,7 @@ __all__ = [
     "get_kr",
     "get_lsm_option",
     "health_check",
+    "hypotheses",
     "joint_tests",
     "kenward_roger_vcov",
     "krmodcomp",
@@ -251,6 +261,7 @@ __all__ = [
     "satmodcomp",
     "satterthwaite_df",
     "set_emm_options",
+    "slopes",
     "split_conformal_pi",
     "split_fac",
     "summary",

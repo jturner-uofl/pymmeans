@@ -57,6 +57,22 @@ def _validate_design(info: ModelInfo) -> None:
     factors" message even though the analytic path supported
     them.
     """
+    if info.design_info is None:
+        raw = getattr(info, "raw_result", None)
+        if raw is not None and raw.__class__.__module__.split(".")[0] == "pyfixest":
+            raise ValueError(
+                "Reference-grid operations (ref_grid / emmeans / emtrends / "
+                "avg_slopes) are not supported on pyfixest fits, which carry "
+                "no patsy design_info. Use hypotheses(fit, g) for "
+                "coefficient-level tests, or refit with statsmodels for EMMs."
+            )
+        raise ValueError(
+            "This ModelInfo has no patsy design_info, so a reference grid "
+            "cannot be built from it (it was constructed via emmobj(), "
+            "unpickled, or comes from an adapter without a patsy design). "
+            "Build the model through qdrg(formula, data, ...) or a "
+            "statsmodels formula fit instead."
+        )
     multi_col = getattr(info, "multi_col_factors", {}) or {}
     for factor in info.design_info.factor_infos:
         name = factor.name()

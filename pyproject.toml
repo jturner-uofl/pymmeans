@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pymmeans"
-version = "0.6.0"
+version = "0.7.0"
 description = "Estimated marginal means for Python — a native port of R's emmeans."
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -62,6 +62,11 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.4",
     "mypy>=1.8",
+    # pyfixest enables the high-dimensional fixed-effects adapter tests
+    # (``tests/test_pyfixest.py``); without it those tests are skipped
+    # via ``pytest.importorskip``. Used only for coefficient-level
+    # operations (``hypotheses``) on absorbed-FE models.
+    "pyfixest>=0.18",
 ]
 bench = ["pytest-benchmark>=4.0"]
 docs = [

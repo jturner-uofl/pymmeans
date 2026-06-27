@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import re
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1203,4 +1204,138 @@ def from_statsmodels(result: Any) -> ModelInfo:
         fit_weights=fit_weights,
         estimability_basis=est_basis,
         multi_col_factors=multi_col_factors_dict,
+    )
+
+
+def from_pyfixest(result: Any) -> ModelInfo:
+    """Build a ``ModelInfo`` from a fitted ``pyfixest`` estimator.
+
+    ``pyfixest`` (``feols`` / ``fepois``) absorbs fixed effects and
+    parses formulas with ``formulaic`` rather than ``patsy``, so it
+    exposes no patsy ``design_info`` and no reference grid for the
+    absorbed terms. The returned :class:`ModelInfo` therefore carries
+    the within-fixed-effect coefficient vector and covariance but a
+    ``design_info`` of ``None``: it supports the coefficient-level
+    surface (:func:`pymmeans.hypotheses` --- linear and nonlinear
+    delta-method tests of the estimated coefficients) but **not**
+    reference-grid operations (:func:`pymmeans.emmeans`,
+    :func:`pymmeans.avg_slopes`), which require patsy.
+
+    The extracted coefficients and covariance match a dummy-encoded
+    ``statsmodels`` OLS to floating-point precision.
+
+    Parameters
+    ----------
+    result
+        A fitted ``pyfixest`` estimator (e.g. ``pf.feols("y ~ x | fe",
+        data).``).
+
+    Returns
+    -------
+    ModelInfo
+        With ``design_info=None`` and empty ``factors`` / ``data``;
+        suitable for :func:`pymmeans.hypotheses`.
+
+    Examples
+    --------
+    >>> import pyfixest as pf  # doctest: +SKIP
+    >>> from pymmeans import hypotheses  # doctest: +SKIP
+    >>> fit = pf.feols("y ~ x1 + x2 | fe", data)  # doctest: +SKIP
+    >>> hypotheses(fit, lambda b: b[0] / b[1]).frame  # doctest: +SKIP
+    """
+    if not (
+        hasattr(result, "coef")
+        and hasattr(result, "vcov")
+        and hasattr(result, "_coefnames")
+    ):
+        raise TypeError(
+            "from_pyfixest expects a fitted pyfixest estimator with "
+            "coef() / vcov() / _coefnames; got "
+            f"{type(result).__name__}."
+        )
+
+    coef = result.coef()
+    # coef() returns a pandas Series keyed by coefficient name.
+    param_names = [str(k) for k in coef.index]
+    beta = np.asarray(coef.to_numpy(), dtype=float)
+
+    # ``Feols.vcov`` is a *method* requiring a ``vcov=`` argument; the
+    # already-computed covariance from the fit is on ``_vcov``.
+    vcov_raw = getattr(result, "_vcov", None)
+    if vcov_raw is None:
+        raise ValueError(
+            "pyfixest result exposes no ``_vcov``; refit with a "
+            "covariance specification."
+        )
+    vcov = np.asarray(
+        vcov_raw.to_numpy() if hasattr(vcov_raw, "to_numpy") else vcov_raw,
+        dtype=float,
+    )
+    if vcov.shape != (beta.shape[0], beta.shape[0]):
+        # Some pyfixest versions expose vcov keyed/ordered differently;
+        # align to the coefficient order when it is a labelled frame.
+        if hasattr(vcov_raw, "loc"):
+            vcov = np.asarray(
+                vcov_raw.loc[param_names, param_names], dtype=float
+            )
+        else:
+            raise ValueError(
+                f"pyfixest covariance shape {vcov.shape} is inconsistent "
+                f"with {beta.shape[0]} coefficients and could not be aligned."
+            )
+
+    # Inference scale and degrees of freedom.
+    #
+    # ``feols`` is OLS within the absorbed fixed effects and uses a
+    # t-test; ``fepois`` (and any other GLM-family estimator) is
+    # asymptotic and uses a z-test (df = inf), exactly as
+    # ``from_statsmodels`` sets df = inf for GLM fits. Getting this wrong
+    # silently mis-states every p-value and confidence interval.
+    method = str(getattr(result, "_method", "")).lower()
+    is_glm = method not in ("feols", "ols", "")
+
+    if is_glm:
+        df_resid = np.inf
+    else:
+        # Match pyfixest's own (= dummy-encoded OLS) residual df:
+        #   df = N - k - sum(FE levels) + (n_FE - 1).
+        # The +(n_FE - 1) restores the intercepts shared across multiple
+        # absorbed fixed-effect blocks. Falls back to inf if the private
+        # attributes a version exposes are missing, with a warning rather
+        # than a silently wrong small-sample df.
+        n_obs = getattr(result, "_N", None)
+        k = getattr(result, "_k", None)
+        k_fe = getattr(result, "_k_fe", None)
+        if n_obs is None or k is None:
+            warnings.warn(
+                "pyfixest result is missing the _N / _k attributes this "
+                "pymmeans version reads; falling back to an asymptotic "
+                "(z-test) df. Check pyfixest version compatibility.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            df_resid = np.inf
+        else:
+            fe_dims = 0
+            n_fe = 0
+            if k_fe is not None:
+                fe_arr = np.atleast_1d(np.asarray(k_fe, dtype=float))
+                fe_dims = int(fe_arr.sum())
+                n_fe = int(fe_arr.shape[0])
+            df_resid = float(n_obs - k - fe_dims + max(n_fe - 1, 0))
+
+    response_name = str(getattr(result, "_depvar", "y"))
+
+    return ModelInfo(
+        beta=beta,
+        vcov=vcov,
+        param_names=param_names,
+        factors={},
+        numeric_means={},
+        df_resid=df_resid,
+        design_info=None,
+        data=None,
+        response_name=response_name,
+        family=None,
+        raw_result=result,
     )

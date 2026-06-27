@@ -1538,6 +1538,22 @@ def emmeans(
             and hasattr(data_attr, "columns")
             and "_emmobj_origin" in data_attr.columns
         )
+        # A live pyfixest fit also has no patsy design_info (it absorbs
+        # fixed effects and parses with formulaic). Steer the user to the
+        # operations that ARE supported rather than the misleading
+        # pickle / emmobj messages below.
+        raw = getattr(info, "raw_result", None)
+        if raw is not None and raw.__class__.__module__.split(".")[0] == "pyfixest":
+            raise ValueError(
+                "emmeans() / reference-grid operations are not supported on "
+                "pyfixest fits: pyfixest absorbs fixed effects and parses "
+                "with formulaic, so there is no patsy design_info to build a "
+                "grid from. The coefficient-level surface IS supported: use "
+                "hypotheses(fit, g) for linear and nonlinear delta-method "
+                "tests of the within-fixed-effect coefficients. To get EMMs, "
+                "refit the model with statsmodels (dummy-encoded fixed "
+                "effects) via smf.ols / smf.glm."
+            )
         if is_emmobj_origin:
             raise ValueError(
                 "emmeans() cannot build a reference grid from a "

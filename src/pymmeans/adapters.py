@@ -130,7 +130,51 @@ class LinearmodelsAdapter:
         return from_linearmodels(result, data=data)
 
 
-_ADAPTERS: list[type[ModelAdapter]] = [StatsmodelsAdapter, LinearmodelsAdapter]
+class PyFixestAdapter:
+    """Built-in adapter for ``pyfixest`` ``Feols`` / ``Fepois`` results.
+
+    ``pyfixest`` parses formulas with ``formulaic`` and *absorbs* fixed
+    effects, so it exposes no patsy ``design_info`` and no
+    reference-grid-able design for the absorbed terms. Reference-grid
+    operations (:func:`pymmeans.emmeans`, :func:`pymmeans.avg_slopes`)
+    therefore require patsy and are not yet supported on ``pyfixest``
+    fits. What *is* supported is the coefficient-level surface that
+    needs only the within-fixed-effect coefficient vector and its
+    covariance: :func:`pymmeans.hypotheses` (linear and nonlinear
+    delta-method tests of the estimated coefficients). The extracted
+    coefficients and covariance match a dummy-encoded ``statsmodels``
+    OLS to floating-point precision.
+    """
+
+    name = "pyfixest"
+
+    @staticmethod
+    def detects(result: Any) -> bool:
+        """True iff ``result`` is a fitted pyfixest estimator.
+
+        Duck-typed (so importing pyfixest is never required): a fitted
+        ``Feols`` exposes ``coef()``, ``vcov()`` and ``_coefnames``.
+        """
+        return (
+            hasattr(result, "coef")
+            and hasattr(result, "vcov")
+            and hasattr(result, "_coefnames")
+            and type(result).__module__.split(".")[0] == "pyfixest"
+        )
+
+    @staticmethod
+    def build(result: Any, **_kwargs: Any) -> ModelInfo:
+        """Delegate to :func:`pymmeans.utils.from_pyfixest`."""
+        from pymmeans.utils import from_pyfixest
+
+        return from_pyfixest(result)
+
+
+_ADAPTERS: list[type[ModelAdapter]] = [
+    StatsmodelsAdapter,
+    LinearmodelsAdapter,
+    PyFixestAdapter,
+]
 
 
 def register_adapter(

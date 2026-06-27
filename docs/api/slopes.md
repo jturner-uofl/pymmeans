@@ -1,0 +1,3 @@
+# `pymmeans.slopes`
+
+::: pymmeans.slopes

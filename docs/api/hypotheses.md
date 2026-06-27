@@ -1,0 +1,3 @@
+# `pymmeans.hypotheses`
+
+::: pymmeans.hypotheses

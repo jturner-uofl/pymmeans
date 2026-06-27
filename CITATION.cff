@@ -32,8 +32,8 @@ authors:
     given-names: Jason S.
     email: jason.s.turner@gmail.com
     affiliation: "Independent Researcher"
-version: 0.6.0
-date-released: 2026-06-08
+version: 0.7.0
+date-released: 2026-06-26
 license: GPL-3.0-or-later
 repository-code: "https://github.com/jturner-uofl/pymmeans"
 url: "https://github.com/jturner-uofl/pymmeans"

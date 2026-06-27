@@ -5,6 +5,8 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/jturner-uofl/pymmeans?label=release)](https://github.com/jturner-uofl/pymmeans/releases)
 
+Status: **Beta** · v0.7.0 · API stable, numerical surface frozen.
+
 Estimated marginal means (EMMs) for Python. A native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) and
 [pbkrtest](https://cran.r-project.org/package=pbkrtest), validated against both
@@ -23,18 +25,25 @@ with no R toolchain required.
 
 ## Status
 
-Beta. Version 0.6.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
+Beta. Version 0.7.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
 proportional-hazards, parametric AFT, ordinal, multinomial, and
-survey-weighted model classes. 90 of 100 strict R-`emmeans` parity items
-(94 of 100 with partially-supported items counted; see the
-[R-parity matrix](docs/r_parity_matrix.md)). The numerical surface is
-frozen; minor API polish is still possible until version 1.0.
+survey-weighted model classes. For MixedLM the Kenward–Roger and
+Satterthwaite degrees-of-freedom machinery covers the `cov_re`,
+`re_formula`, and `vc_formula` random-effects syntaxes. 90 of 100
+strict R-`emmeans` parity items (94 of 100 with partially-supported
+items counted; see the [R-parity matrix](docs/r_parity_matrix.md)).
+The numerical surface is frozen; minor API polish is still possible
+until version 1.0.
+
+The public API surface is exercised by 471 unit tests.
+The full suite reaches 87% line coverage and totals 1,077 passing
+tests, including the internal audit-regression file.
 
 | Metric                                  | Value                          |
 |-----------------------------------------|--------------------------------|
-| Unit tests                              | 1,037 passing                  |
+| Unit tests                              | 1,077 passing (471 public-surface) |
 | Line coverage                           | 87 %                           |
-| Validation contracts                    | 251 (134 R cross-validation + 67 structural + 50 Monte-Carlo) |
+| Validation contracts                    | 260 (139 R cross-validation + 79 structural + 42 Monte-Carlo) |
 | Validation contract failures            | 0                              |
 | Wall-clock vs R `emmeans` (common paths)| 1.6–4.1 times faster on 4 of 6 representative workloads |
 | Wall-clock vs R `emmeans` (slow paths)  | 13–34 times slower on 2 of 6 (both diagnosed; see Section 5 of the manuscript) |
@@ -43,7 +52,7 @@ Representative validation evidence from the package's narrative validation
 notebook:
 
 - Direct cross-validation against R `emmeans` reference values to
-  `atol = 1e-14` on the deterministic surface (134 contracts).
+  `atol = 1e-14` on the deterministic surface (139 contracts).
 - The algebraic identity `SE = sqrt(L V L^T)` verified to exact zero on
   four archival datasets across three model classes.
 - Conformal coverage within `±0.006` of nominal across Gaussian,
@@ -177,6 +186,14 @@ or fuller coverage is provided in one library.
 | predictmeans / phia / gmodels::estimable | Predicted means, post-hoc interactions, custom contrasts | Subsumed             |
 | mice::pool | Rubin's-rules pooling for any downstream R estimator                     | Partial (pools pymmeans output; `mice` itself remains in R) |
 
+**Contrast families** (`contrast(em, method=...)`): `pairwise`,
+`revpairwise`, `consec`, `poly`, `trt.vs.ctrl`, `eff`, `del.eff`,
+`mean_chg`, plus custom coefficient lists.
+**Multiplicity adjustments** (`adjust=...`): Tukey, Dunnett (exact
+`mvt`), Šidák, Bonferroni, Holm, Hochberg, Hommel, Scheffé, and the
+Benjamini–Hochberg (`BH`) and Benjamini–Yekutieli (`BY`)
+false-discovery-rate controls.
+
 See [docs/r_parity_matrix.md](docs/r_parity_matrix.md) for the
 per-function R-parity table, and
 [docs/vs-r.md](docs/vs-r.md) for measured numerical agreement.
@@ -208,12 +225,12 @@ the full enumeration is in the validation notebook and the manuscript.
 
 Three independent layers of evidence support the numerical claims.
 
-- **Automated test suite.** 1,037 unit tests at 87 % line coverage.
-  Execute with `make test` or `pytest -q`.
-- **Narrative validation notebook.** 251 enumerated contracts spanning
-  direct cross-validation against R reference values (134), structural
-  and self-consistency identities (67), and Monte-Carlo coverage and
-  calibration checks (50). Zero failures. The notebook is at
+- **Automated test suite.** 1,077 unit tests at 87 % line coverage
+  (471 on the public API surface). Execute with `make test` or `pytest -q`.
+- **Narrative validation notebook.** 260 enumerated contracts spanning
+  direct cross-validation against R reference values (139), structural
+  and self-consistency identities (79), and Monte-Carlo coverage and
+  calibration checks (42). Zero failures. The notebook is at
   [`examples/jss_audit/jss_case_study.ipynb`](https://nbviewer.org/github/jturner-uofl/pymmeans/blob/main/examples/jss_audit/jss_case_study.ipynb)
   and can be re-executed with `make notebook`.
 - **R reference fits.** Reference CSV outputs from the original R

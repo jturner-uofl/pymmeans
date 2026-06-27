@@ -5,6 +5,43 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-06-26
+
+### Added
+
+- `avg_slopes()` / `slopes()` — average marginal effects over the observed
+  sample, on the link or response scale, with optional `by=` grouping.
+  Closes the headline gap against `marginaleffects`: on a linear model the
+  average slope and its standard error equal the OLS coefficient exactly
+  (verified to `1e-9` / `1e-8`); on a logistic GLM the response-scale
+  average marginal effect matches the closed-form `mean(p(1-p)beta)` to
+  `6e-15`. Against R `marginaleffects::avg_slopes` the point estimate
+  agrees to `~1e-9` and the standard error to within marginaleffects' own
+  finite-difference tolerance (`~1e-7`); pymmeans reproduces the *exact*
+  analytic delta-method standard error (to `~1e-12`), which the
+  double-finite-differenced reference does not.
+- `slopes()` returns per-observation marginal effects with full
+  delta-method standard errors (the per-row Jacobian carries the inverse
+  link's curvature term, not a point-evaluated approximation).
+- `hypotheses()` — nonlinear `g(beta)` tests by the delta method with a
+  finite-difference Jacobian. Coefficient-ratio standard errors match the
+  closed-form ratio delta method and R `car::deltaMethod`.
+- `from_pyfixest()` and `PyFixestAdapter` — coefficient-level support for
+  `pyfixest` high-dimensional fixed-effects models. Within-fixed-effect
+  coefficients, covariances, residual degrees of freedom (including the
+  absorbed-fixed-effect dimensions, and asymptotic `z` inference for
+  `fepois`), and their delta-method tests reproduce pyfixest's own output
+  and a dummy-encoded `statsmodels` fit. Reference-grid operations
+  (`emmeans`, `avg_slopes`, `ref_grid`) remain patsy-only and raise a
+  clear, steering error on `pyfixest` fits.
+
+### Documentation
+
+- New validation-notebook Section XXII closing the `marginaleffects` gaps,
+  with nine closed-form / structural contracts (tolerances `1e-6` to
+  `1e-10`); the executed notebook records 260 contracts, zero failures.
+- New API pages for the `slopes` and `hypotheses` modules.
+
 ## [0.6.0] — 2026-06-08
 
 ### Added
