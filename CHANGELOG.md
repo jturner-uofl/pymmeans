@@ -5,6 +5,29 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-06-28
+
+### Added / R-emmeans parity
+
+- **HPD credible intervals** (R `emmeans`'s `hpd.summary`).
+  `posterior_emmeans(..., hpd=True)` and
+  `posterior_emm_summary(..., hpd=True)` now report highest-posterior-
+  density intervals — the narrowest interval carrying the requested
+  probability mass — instead of the default equal-tailed percentile
+  credible interval. Implemented with the Chen–Shao order-statistic
+  algorithm; the endpoints match `arviz.hdi` (the reference HDI) to
+  machine precision on skewed (log-normal, gamma) posteriors. For a
+  skewed posterior the HPD interval is strictly narrower than the
+  equal-tailed one; for a symmetric posterior they coincide. Default
+  behaviour (`hpd=False`) is unchanged.
+
+### Documentation
+
+- R-parity matrix: `hpd.summary` split out of the R-adapter "missing" row
+  and marked full. New validation-notebook Section XXXII; the executed
+  notebook records 334 contracts (177 cross-validation + 115 structural +
+  42 Monte-Carlo), zero failures.
+
 ## [0.15.1] — 2026-06-28
 
 ### Validation

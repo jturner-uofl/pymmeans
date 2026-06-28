@@ -52,6 +52,41 @@ from pymmeans.emmeans import EMMResult, _validate_level
 from pymmeans.utils import ModelInfo
 
 
+def _hpd_intervals(samples: np.ndarray, level: float) -> tuple[np.ndarray, np.ndarray]:
+    """Highest-posterior-density (HPD) interval per column, matching R
+    ``emmeans``'s ``hpd.summary`` / ``arviz.hdi``.
+
+    Implements the Chen--Shao order-statistic algorithm: for a sorted
+    draw vector, the HPD interval of probability ``level`` is the
+    narrowest window spanning ``floor(level * n)`` consecutive draws.
+    For a symmetric posterior it coincides with the equal-tailed
+    interval; for a skewed one it is the shorter, correct interval.
+
+    Parameters
+    ----------
+    samples
+        Posterior draws, shape ``(n_samples, n_rows)``.
+    level
+        Credible mass in ``(0, 1)``.
+
+    Returns
+    -------
+    (lower, upper)
+        Each of shape ``(n_rows,)``.
+    """
+    s = np.sort(np.asarray(samples, dtype=float), axis=0)
+    n = s.shape[0]
+    k = int(np.floor(level * n))
+    if k < 1:
+        k = 1
+    if k >= n:
+        return s[0].copy(), s[-1].copy()
+    widths = s[k:] - s[: n - k]  # (n - k, n_rows)
+    i = np.argmin(widths, axis=0)  # (n_rows,)
+    cols = np.arange(s.shape[1])
+    return s[i, cols], s[i + k, cols]
+
+
 @dataclass(frozen=True)
 class PosteriorInfo:
     """Model metadata + posterior samples for a Bayesian fit.
@@ -91,6 +126,7 @@ def posterior_emm_summary(
     bias_adjust: bool = False,
     sigma_sq: float | None = None,
     offset_mean: float = 0.0,
+    hpd: bool = False,
 ) -> dict[str, np.ndarray]:
     """Summarise the posterior of ``L_marg @ beta`` at each row of ``L_marg``.
 
@@ -119,12 +155,19 @@ def posterior_emm_summary(
         Residual variance for the bias adjustment.
     offset_mean
         Constant added to each draw before applying the link / transform.
+    hpd
+        When ``True``, report highest-posterior-density (HPD) intervals
+        (R ``emmeans``'s ``hpd.summary`` / ``arviz.hdi``) instead of the
+        default equal-tailed percentile credible interval. For a skewed
+        posterior the HPD interval is narrower and is the correct
+        smallest-volume credible set.
 
     Returns
     -------
     dict
         Keys ``emmean`` (posterior mean), ``SE`` (posterior SD),
-        ``lower_cl``, ``upper_cl`` (posterior percentiles).
+        ``lower_cl``, ``upper_cl`` (posterior credible-interval
+        endpoints -- equal-tailed percentiles, or HPD when ``hpd=True``).
     """
     level = _validate_level(level)
     beta_samples = np.asarray(beta_samples, dtype=float)
@@ -234,11 +277,17 @@ def posterior_emm_summary(
             stacklevel=3,
         )
 
+    if hpd:
+        _lower, _upper = _hpd_intervals(mu_samples, level)
+    else:
+        _lower = np.percentile(mu_samples, 100.0 * alpha / 2.0, axis=0)
+        _upper = np.percentile(mu_samples, 100.0 * (1.0 - alpha / 2.0), axis=0)
+
     return {
         "emmean": _emmean_vec,
         "SE": _se_vec,
-        "lower_cl": np.percentile(mu_samples, 100.0 * alpha / 2.0, axis=0),
-        "upper_cl": np.percentile(mu_samples, 100.0 * (1.0 - alpha / 2.0), axis=0),
+        "lower_cl": _lower,
+        "upper_cl": _upper,
     }
 
 
@@ -253,6 +302,7 @@ def posterior_emmeans(
     weights: str | None = None,
     *,
     mode: str | None = None,
+    hpd: bool = False,
 ) -> EMMResult:
     """Posterior-based emmeans on a Bayesian fit.
 
@@ -308,6 +358,12 @@ def posterior_emmeans(
           requires per-category posterior summaries; use
           :func:`pymmeans.ordinal_emmeans` / :func:`pymmeans.multinom_emmeans`
           instead.
+    hpd
+        When ``True``, ``lower_cl`` / ``upper_cl`` are highest-posterior-
+        density (HPD) intervals (R ``emmeans``'s ``hpd.summary`` /
+        ``arviz.hdi``) rather than the default equal-tailed percentile
+        credible interval -- the narrower, smallest-volume credible set,
+        which differs from equal-tailed for a skewed posterior.
     """
     from pymmeans.emmeans import emmeans as _emmeans
     from pymmeans.transforms import detect_transform
@@ -433,6 +489,7 @@ def posterior_emmeans(
         response_transform=response_transform,
         family=info.family if type == "response" else None,
         offset_mean=info.offset_mean,
+        hpd=hpd,
     )
     frame = base.frame.copy()
     frame["emmean"] = summary["emmean"]

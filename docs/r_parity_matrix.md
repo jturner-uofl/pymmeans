@@ -83,7 +83,8 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `emmobj()` / `as.emmGrid()` | ✅ Full | `emmobj(bhat, V, levels)` — formula-less low-level constructor matching R `emmobj` |
 | `rbind(c1, c2, ..., adjust=)` | ✅ Full | Concatenates `ContrastResult`s and applies a joint multiplicity adjustment over the combined family |
 | `emm_list` | ✅ Full | `EmmList` named / positional container; `summary` / `confint` / `test` recurse; `as_r_frame(EmmList)` combines members into one DataFrame |
-| `as.glht()` / `as.mcmc()` / `hpd.summary()` | ❌ Missing | R-specific adapters |
+| `as.glht()` / `as.mcmc()` | ❌ Missing | R-specific adapters |
+| `hpd.summary()` (HPD credible intervals) | ✅ Full | `posterior_emmeans(..., hpd=True)` / `posterior_emm_summary(..., hpd=True)` report highest-posterior-density intervals via the Chen–Shao algorithm; matches `arviz.hdi` to the bit (jss_audit §XXXII) |
 | `mvcontrast()` | ✅ Full | `pymmeans.mvcontrast` on a `MultivariateEMM` from `multivariate_emmeans(_MultivariateOLSResults, …)`; Hotelling T² / F per between-contrast, Sidak default; matches R machine-precision (see jss_audit §VII.5). `mvregrid()` still missing. |
 | `add_grouping`, `comb_facs`, `split_fac`, `permute_levels` | ✅ Full | Grid manipulation utilities. All four are exported from ``pymmeans`` and covered by ``tests/test_public_api_smoke.py``. |
 | `nesting=`, `nuisance=` kwargs on ``emmeans()`` | ✅ Full | Auto-nesting detection plus user-supplied dict; nuisance-over-weights override on all four weight schemes (see `src/pymmeans/emmeans.py`). |

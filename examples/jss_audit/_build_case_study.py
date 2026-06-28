@@ -6362,7 +6362,69 @@ check("XXXI.2", "effect_size_SE strictly increases as edf decreases",
 
 # ================================================================== §XXXII
 md(r"""
-# Section XXXII — Validation scorecard
+# Section XXXII — HPD credible intervals (R `hpd.summary`)
+
+On a Bayesian fit, R `emmeans`'s `hpd.summary` reports **highest-posterior-
+density** intervals — the narrowest interval carrying the requested
+probability mass — rather than equal-tailed percentiles. For a skewed
+posterior the two differ, and the HPD interval is the correct
+smallest-volume credible set. `pymmeans` adds `hpd=True` to
+`posterior_emmeans` / `posterior_emm_summary`, using the Chen–Shao
+order-statistic algorithm.
+
+* **§XXXII.1** — the HPD endpoints match `arviz.hdi` (the reference HDI
+  implementation) to machine precision on skewed (log-normal, gamma) draws.
+* **§XXXII.2** — for a skewed posterior the HPD interval is strictly
+  narrower than the equal-tailed interval; for a symmetric posterior the two
+  coincide.
+""")
+
+code(r"""
+# §XXXII.1 - HPD matches arviz.hdi to the bit on skewed posterior draws.
+import numpy as np
+import arviz as az
+from pymmeans import posterior_emm_summary
+
+_rng_h = np.random.default_rng(7)
+_nh = 15000
+_draws = np.column_stack([
+    _rng_h.lognormal(0.0, 0.6, _nh),
+    _rng_h.lognormal(0.5, 0.9, _nh),
+    _rng_h.gamma(2.0, 2.0, _nh),
+])
+_hpd = posterior_emm_summary(_draws, np.eye(3), level=0.95, hpd=True)
+_worst_h = 0.0
+for _r in range(3):
+    _a = az.hdi(_draws[:, _r], hdi_prob=0.95)
+    _worst_h = max(_worst_h, abs(float(_hpd["lower_cl"][_r]) - _a[0]),
+                   abs(float(_hpd["upper_cl"][_r]) - _a[1]))
+print(f"  max|HPD - arviz.hdi| over 3 skewed posteriors = {_worst_h:.2e}")
+check("XXXII.1", "posterior HPD intervals match arviz.hdi (Chen-Shao) to machine precision",
+      _worst_h, 1e-10, "R cross-validation")
+""")
+
+code(r"""
+# §XXXII.2 - HPD narrower than equal-tailed (skewed); coincide (symmetric).
+_sk = _rng_h.lognormal(0.0, 0.8, (20000, 1))
+_h = posterior_emm_summary(_sk, np.eye(1), hpd=True)
+_e = posterior_emm_summary(_sk, np.eye(1), hpd=False)
+_w_hpd = float(_h["upper_cl"][0] - _h["lower_cl"][0])
+_w_eti = float(_e["upper_cl"][0] - _e["lower_cl"][0])
+print(f"  skewed: HPD width {_w_hpd:.4f} < equal-tailed width {_w_eti:.4f}")
+check("XXXII.2", "HPD interval is strictly narrower than equal-tailed for a skewed posterior",
+      0.0 if _w_hpd < _w_eti else 1.0, 0.0, "structural")
+
+_sym = _rng_h.standard_normal((40000, 1))
+_hs = posterior_emm_summary(_sym, np.eye(1), hpd=True)
+_es = posterior_emm_summary(_sym, np.eye(1), hpd=False)
+check("XXXII.2", "HPD coincides with equal-tailed for a symmetric posterior (MC tol)",
+      max(abs(float(_hs["lower_cl"][0]) - float(_es["lower_cl"][0])),
+          abs(float(_hs["upper_cl"][0]) - float(_es["upper_cl"][0]))), 0.05, "structural")
+""")
+
+# ================================================================== §XXXIII
+md(r"""
+# Section XXXIII — Validation scorecard
 """)
 
 code(r"""
