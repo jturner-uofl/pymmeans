@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/jturner-uofl/pymmeans?label=release)](https://github.com/jturner-uofl/pymmeans/releases)
 
-Status: **Beta** · v0.16.0 · API stable, numerical surface frozen.
+Status: **Beta** · v0.17.0 · API stable, numerical surface frozen.
 
 Estimated marginal means (EMMs) for Python. A native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) and
@@ -25,7 +25,7 @@ with no R toolchain required.
 
 ## Status
 
-Beta. Version 0.16.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
+Beta. Version 0.17.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
 proportional-hazards, parametric AFT, ordinal, multinomial, and
 survey-weighted model classes. For MixedLM the Kenward–Roger and
 Satterthwaite degrees-of-freedom machinery covers the `cov_re`,
@@ -35,15 +35,15 @@ items counted; see the [R-parity matrix](docs/r_parity_matrix.md),
 the audited source of truth). The numerical surface is frozen; minor
 API polish is still possible until version 1.0.
 
-The public API surface is exercised by 571 unit tests.
-The full suite reaches 87% line coverage and totals 1,177 passing
+The public API surface is exercised by 580 unit tests.
+The full suite reaches 87% line coverage and totals 1,186 passing
 tests, including the internal audit-regression file.
 
 | Metric                                  | Value                          |
 |-----------------------------------------|--------------------------------|
-| Unit tests                              | 1,177 passing (571 public-surface) |
+| Unit tests                              | 1,186 passing (580 public-surface) |
 | Line coverage                           | 87 %                           |
-| Validation contracts                    | 334 (177 R cross-validation + 115 structural + 42 Monte-Carlo) |
+| Validation contracts                    | 337 (176 R cross-validation + 116 structural + 45 Monte-Carlo) |
 | Validation contract failures            | 0                              |
 | Wall-clock vs R `emmeans` (common paths)| 1.6–4.1 times faster on 4 of 6 representative workloads |
 | Wall-clock vs R `emmeans` (slow paths)  | 13–34 times slower on 2 of 6 (both diagnosed; see Section 5 of the manuscript) |
@@ -52,7 +52,7 @@ Representative validation evidence from the package's narrative validation
 notebook:
 
 - Direct cross-validation against R `emmeans` reference values to
-  `atol = 1e-14` on the deterministic surface (177 contracts).
+  `atol = 1e-14` on the deterministic surface (176 contracts).
 - The algebraic identity `SE = sqrt(L V L^T)` verified to exact zero on
   four archival datasets across three model classes.
 - Conformal coverage within `±0.006` of nominal across Gaussian,
@@ -225,11 +225,11 @@ the full enumeration is in the validation notebook and the manuscript.
 
 Three independent layers of evidence support the numerical claims.
 
-- **Automated test suite.** 1,177 unit tests at 87 % line coverage
-  (571 on the public API surface). Execute with `make test` or `pytest -q`.
-- **Narrative validation notebook.** 334 enumerated contracts spanning
-  direct cross-validation against R reference values (177), structural
-  and self-consistency identities (115), and Monte-Carlo coverage and
+- **Automated test suite.** 1,186 unit tests at 87 % line coverage
+  (580 on the public API surface). Execute with `make test` or `pytest -q`.
+- **Narrative validation notebook.** 337 enumerated contracts spanning
+  direct cross-validation against R reference values (176), structural
+  and self-consistency identities (116), and Monte-Carlo coverage and
   calibration checks (42). Zero failures. The notebook is at
   [`examples/jss_audit/jss_case_study.ipynb`](https://nbviewer.org/github/jturner-uofl/pymmeans/blob/main/examples/jss_audit/jss_case_study.ipynb)
   and can be re-executed with `make notebook`.

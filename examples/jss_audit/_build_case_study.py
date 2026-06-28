@@ -6113,7 +6113,7 @@ _cov = float(np.mean(_covered))
 _band = 1.96 * np.sqrt(0.95 * 0.05 / _K)
 print(f"  coverage of 95% bootstrap CI over {_K} datasets: {_cov:.3f}  (nominal 0.95 +/- {_band:.3f})")
 check("XXVII.2", "bootstrap CI achieves nominal coverage (Monte-Carlo calibration)",
-      max(0.0, abs(_cov - 0.95) - _band - 0.015), 0.0, "Monte-Carlo")
+      max(0.0, abs(_cov - 0.95) - _band - 0.015), 0.0, "Monte Carlo")
 """)
 
 # ================================================================== §XXVIII
@@ -6424,7 +6424,68 @@ check("XXXII.2", "HPD coincides with equal-tailed for a symmetric posterior (MC 
 
 # ================================================================== §XXXIII
 md(r"""
-# Section XXXIII — Validation scorecard
+# Section XXXIII — Simulation-based regrid (R `regrid(N.sim=)`)
+
+R `regrid(object, N.sim=k)` replaces delta-method Wald intervals with
+**simulation-based** ones: draw `k` samples from the asymptotic
+`MVN(β̂, V)` of the coefficients and summarise the sample — no MCMC, no
+refit. `pymmeans` adds `regrid(em, n_sim=k)` (with optional `hpd=` and
+`random_state=`).
+
+* **§XXXIII.1** — on the identity scale (`transform="pass"`) the simulated
+  mean / SE / interval converge to the analytic Wald summary as `k → ∞`.
+* **§XXXIII.2** — on a logit GLM's response scale the simulated mean equals
+  `E[plogis(η)]` (within the small Jensen gap of `plogis(η̂)`), and the
+  intervals lie in `(0, 1)` and are asymmetric — the delta method cannot
+  deliver this.
+""")
+
+code(r"""
+# §XXXIII.1 - identity-scale simulation regrid converges to Wald.
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from scipy.special import expit
+from pymmeans import emmeans, regrid, summary
+
+_rng_s = np.random.default_rng(0)
+_ns = 200
+_dfs = pd.DataFrame({"g": pd.Categorical(_rng_s.choice(["A", "B", "C"], _ns))})
+_dfs["y"] = _dfs["g"].map({"A": 1.0, "B": 2.0, "C": 3.0}).astype(float) + _rng_s.standard_normal(_ns)
+_ems = emmeans(smf.ols("y ~ g", _dfs).fit(), "g")
+_wald = summary(_ems)
+_sim = regrid(_ems, transform="pass", n_sim=300000, random_state=1).frame
+_d = max(
+    float(np.max(np.abs(_sim["emmean"].to_numpy() - _wald["emmean"].to_numpy()))),
+    float(np.max(np.abs(_sim["SE"].to_numpy() - _wald["SE"].to_numpy()))),
+    float(np.max(np.abs(_sim["lower_cl"].to_numpy() - _wald["lower_cl"].to_numpy()))),
+)
+print(f"  max|sim - Wald| (emmean/SE/lower, n_sim=3e5) = {_d:.2e}")
+check("XXXIII.1", "simulation regrid converges to Wald on the identity scale",
+      _d, 1e-2, "Monte Carlo")
+""")
+
+code(r"""
+# §XXXIII.2 - response-scale simulation: E[plogis(eta)], in (0,1), asymmetric.
+_dfg = pd.DataFrame({"g": pd.Categorical(_rng_s.choice(["A", "B"], _ns))})
+_pg = _dfg["g"].map({"A": 0.2, "B": 0.8}).astype(float)
+_dfg["yb"] = (_rng_s.random(_ns) < _pg).astype(int)
+_emg = emmeans(smf.glm("yb ~ g", _dfg, family=sm.families.Binomial()).fit(), "g")
+_eta = _emg.frame["emmean"].to_numpy()
+_simr = regrid(_emg, transform="response", n_sim=300000, random_state=2).frame
+check("XXXIII.2", "response-scale sim mean = E[plogis(eta)] (within Jensen gap of plogis(eta_hat))",
+      float(np.max(np.abs(_simr["emmean"].to_numpy() - expit(_eta)))), 2e-2, "Monte Carlo")
+_in01 = bool((_simr["lower_cl"] > 0).all() and (_simr["upper_cl"] < 1).all())
+_up = _simr["upper_cl"].to_numpy() - _simr["emmean"].to_numpy()
+_lo = _simr["emmean"].to_numpy() - _simr["lower_cl"].to_numpy()
+check("XXXIII.2", "response-scale sim intervals lie in (0,1) and are asymmetric",
+      0.0 if (_in01 and np.any(np.abs(_up - _lo) > 1e-3)) else 1.0, 0.0, "structural")
+""")
+
+# ================================================================== §XXXIV
+md(r"""
+# Section XXXIV — Validation scorecard
 """)
 
 code(r"""

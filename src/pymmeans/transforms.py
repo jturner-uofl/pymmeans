@@ -2124,11 +2124,126 @@ def regrid_response(
 _REGRID_RESPONSE_ALIASES = {"response", "mu", "unlink"}
 
 
+def _regrid_simulate(
+    emm: Any,
+    transform: str | None,
+    n_sim: int,
+    hpd: bool,
+    random_state: int | None,
+) -> Any:
+    """Simulation-based regrid (R ``regrid(object, N.sim=)``).
+
+    Draw ``n_sim`` samples from the asymptotic ``MVN(beta_hat, V)`` of the
+    fitted coefficients, push them through the EMM's ``linfct`` and the
+    requested back-transform, and summarise the resulting sample. This
+    yields *simulation-based* (percentile or HPD) intervals straight from
+    a frequentist fit -- no MCMC, no refit -- which give the correct
+    asymmetric credible-style interval for a nonlinear back-transform
+    where the delta method is poor. Reuses :func:`posterior_emm_summary`.
+    """
+    import numpy as np
+
+    from pymmeans.emmeans import EMMResult
+    from pymmeans.posterior import posterior_emm_summary
+
+    if not isinstance(emm, EMMResult):
+        raise NotImplementedError(
+            "regrid(..., n_sim=) is supported on an EMMResult (the link-scale "
+            "reference grid), not on a ContrastResult. Build the simulation "
+            "grid first with regrid(emm, n_sim=...), then take "
+            "pairs()/contrast() on the result."
+        )
+    if getattr(emm, "type", "link") != "link":
+        raise NotImplementedError(
+            "regrid(..., n_sim=) expects a link-scale EMMResult so it can draw "
+            "from MVN(beta_hat, V) and apply the requested transform exactly "
+            "once. The input is already on the response scale; pass the "
+            "original link-scale EMM (e.g. emmeans(...)) with transform= and "
+            "n_sim=."
+        )
+    if int(n_sim) < 2:
+        raise ValueError(f"n_sim must be >= 2; got {n_sim}.")
+
+    info = emm.model_info
+    if getattr(info, "beta", None) is None or getattr(info, "vcov", None) is None:
+        raise ValueError(
+            "regrid(..., n_sim=) requires the model coefficients and "
+            "covariance (info.beta / info.vcov); they are unavailable (e.g. "
+            "after a pickle round-trip that dropped them)."
+        )
+    L = np.asarray(emm.linfct, dtype=float)
+    beta = np.asarray(info.beta, dtype=float)
+    vcov = np.asarray(info.vcov, dtype=float)
+
+    t = "pass" if transform is None else str(transform).lower()
+    response_transform = None
+    family = None
+    if t in _REGRID_RESPONSE_ALIASES:
+        out_type = "response"
+        if info.family is not None:
+            family = info.family
+        else:
+            response_name = info.response_name or ""
+            rt = detect_transform(response_name)
+            if rt is not None:
+                response_transform = rt
+            elif "(" in response_name:
+                raise ValueError(
+                    "regrid(transform='response', n_sim=...) with response "
+                    f"name {response_name!r} cannot be auto-back-transformed "
+                    "(composite LHS). Summarise the simulation manually via "
+                    "posterior_emm_summary(samples, L, response_transform=...)."
+                )
+            # else: plain OLS — response scale equals the link scale.
+    elif t in ("pass", "none"):
+        out_type = "link"
+    else:
+        raise NotImplementedError(
+            f"regrid(transform={transform!r}, n_sim=...) is supported only for "
+            "transform='response' (back-transform via the model link / LHS "
+            "transform) or transform='pass'/None (link scale). For a named "
+            "forward scale use regrid(em, transform=name) (delta method)."
+        )
+
+    rng = np.random.default_rng(random_state)
+    samples = rng.multivariate_normal(beta, vcov, size=int(n_sim))
+    summ = posterior_emm_summary(
+        samples,
+        L,
+        level=emm.level,
+        response_transform=response_transform,
+        family=family,
+        offset_mean=getattr(info, "offset_mean", 0.0) or 0.0,
+        hpd=hpd,
+    )
+    frame = emm.frame.copy()
+    frame["emmean"] = summ["emmean"]
+    frame["SE"] = summ["SE"]
+    frame["lower_cl"] = summ["lower_cl"]
+    frame["upper_cl"] = summ["upper_cl"]
+    frame["df"] = float(int(n_sim) - 1)
+    return EMMResult(
+        frame=frame,
+        linfct=L,
+        model_info=info,
+        target=emm.target,
+        by=emm.by,
+        level=emm.level,
+        type=out_type,
+        inference_kind="posterior",
+        at=getattr(emm, "at", None),
+        weights=getattr(emm, "weights", "equal") or "equal",
+    )
+
+
 def regrid(
     emm_or_contrast: Any,
     transform: str | None = "response",
     bias_adjust: bool = False,
     force: bool = False,
+    n_sim: int | None = None,
+    hpd: bool = False,
+    random_state: int | None = None,
 ) -> Any:
     """R-style ``regrid(object, transform=...)`` wrapper.
 
@@ -2175,6 +2290,23 @@ def regrid(
         ``bias_adjust`` is honoured only on the response-back-
         transformation step (R's behaviour), not when applying a
         subsequent forward.
+    n_sim
+        When set, perform a **simulation-based** regrid (R
+        ``regrid(object, N.sim=)``): draw ``n_sim`` samples from the
+        asymptotic ``MVN(beta_hat, V)`` of the fitted coefficients and
+        report sample-based intervals on the target scale, rather than
+        delta-method Wald intervals. Useful for nonlinear back-transforms
+        (``transform="response"``) where the delta method is poor — the
+        simulated interval is correctly asymmetric. Supported for a
+        link-scale ``EMMResult`` with ``transform="response"`` or
+        ``"pass"``/``None``.
+    hpd
+        With ``n_sim``, report highest-posterior-density intervals on the
+        simulated sample (see :func:`posterior_emm_summary`) instead of
+        equal-tailed percentiles. Ignored when ``n_sim`` is ``None``.
+    random_state
+        Optional seed for the ``MVN`` draw, for reproducible simulation
+        intervals. Ignored when ``n_sim`` is ``None``.
 
     Returns
     -------
@@ -2183,6 +2315,10 @@ def regrid(
     longer on the model's native link is treated as a response-
     scale display).
     """
+    if n_sim is not None:
+        return _regrid_simulate(
+            emm_or_contrast, transform, n_sim, hpd, random_state,
+        )
     # R idiomatically uses ``transform = NULL`` to mean "leave the
     # scale alone". Accept Python ``None`` as the equivalent so users
     # porting R code don't hit a NotImplementedError on a documented

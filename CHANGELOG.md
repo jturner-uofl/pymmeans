@@ -5,6 +5,37 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-06-28
+
+### Added / R-emmeans parity
+
+- **Simulation-based regrid** (R `regrid(object, N.sim=)`).
+  `regrid(em, n_sim=k)` draws `k` samples from the asymptotic
+  `MVN(β̂, V)` of the fitted coefficients and reports sample-based
+  intervals — no MCMC, no refit. On the identity scale
+  (`transform="pass"`) it converges to the analytic Wald interval; on a
+  nonlinear back-transform (`transform="response"`) it gives the correct
+  asymmetric interval (e.g. logit response intervals lie in `(0, 1)`,
+  with the simulated mean equal to `E[plogis(η)]`) where the delta method
+  cannot. Optional `hpd=True` (HPD intervals on the simulated sample) and
+  `random_state=` (reproducible draws). Reuses the posterior-summary
+  machinery; supported for a link-scale `EMMResult`.
+
+### Fixed
+
+- Validation-notebook scorecard: three Monte-Carlo checks (the
+  bootstrap-coverage contract in §XXVII plus the two new §XXXIII
+  simulation contracts) were tagged `"Monte-Carlo"` but the categoriser
+  matched `"Monte Carlo"`, so they were silently counted as
+  cross-validations. Normalised the label; the counts now read 176
+  cross-validation + 116 structural + 45 Monte-Carlo.
+
+### Documentation
+
+- R-parity matrix: `regrid` row documents the new `N.sim=` capability.
+  New validation-notebook Section XXXIII; the executed notebook records
+  337 contracts, zero failures.
+
 ## [0.16.0] — 2026-06-28
 
 ### Added / R-emmeans parity

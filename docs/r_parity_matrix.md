@@ -72,7 +72,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `emmip(model, formula, PIs=, dodge=, CIs=, plotit=)` | ✅ Full | `PIs=True`, `dodge=`, `plotit=False` returning R-style DataFrame, `CIs=` as R alias for `show_ci=`. `abbr.len` deferred to v0.2 |
 | `plot(emm)` | 🟡 Partial | Basic forest plot; `comparisons=`, `sep=` missing |
 | `ref_grid(model)` | ✅ Full | `nesting=` / `nuisance=` supported; `cov_reduce=` accepts a bare callable (applied to all numeric covariates, R-style `cov.reduce = median`) or a per-column dict, on both `ref_grid()` and `emmeans()`. Validated in jss_audit §XXX. |
-| `regrid(emm, transform=)` | ✅ Full | R-style wrapper; aliases `"response"` / `"mu"` / `"unlink"` route to `regrid_response`; `"pass"` / `"none"` / `None` are no-ops |
+| `regrid(emm, transform=, N.sim=)` | ✅ Full | R-style wrapper; aliases `"response"` / `"mu"` / `"unlink"` route to `regrid_response`; `"pass"` / `"none"` / `None` are no-ops. `n_sim=` gives R's `N.sim=` simulation-based regrid (draw from `MVN(β̂, V)`, no MCMC / no refit), with optional `hpd=` and `random_state=`; converges to Wald on the identity scale and gives the correct asymmetric interval on nonlinear back-transforms (jss_audit §XXXIII) |
 | `eff_size(emm, sigma=, edf=, method=)` | ✅ Full | Cohen's d + Hedges' g; emits R-style `effect_size` / `effect_size_SE` / `effect_size_lower_cl` / `effect_size_upper_cl` columns |
 | `make.tran(type, ...)` | ✅ Full | R aliases: `asin.sqrt`, `log+1`, `sqrt+.5`, `identity` |
 | **`lsmeans` R package coverage** (v2.30-2) | ✅ Full for v0.1 surface | See dedicated section below |
