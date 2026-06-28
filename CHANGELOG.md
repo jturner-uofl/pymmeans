@@ -5,6 +5,27 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-06-28
+
+### Added
+
+- `emtrends(..., max_degree=k)` — higher-order polynomial trends (R
+  `emtrends(max.degree=)`). Returns a trend for each degree 1..k (k ≤ 4)
+  with a `degree` column (`linear`, `quadratic`, ...). The degree-d trend is
+  the d-th derivative of the linear predictor divided by `d!` (R's
+  Taylor/polynomial-coefficient convention, so a raw `y = b2 x²` fit reports
+  `quadratic = b2`, not `2 b2`). Validated against R: the quadratic trend
+  equals `b2` exactly, the cubic trend of a quadratic model is zero, and the
+  degree-1 row is identical to the single-degree `emtrends` (the default
+  path is unchanged). `response_derivative=True` remains single-degree only.
+
+### Documentation
+
+- Removed the "`max.degree > 1` deferred" note from the R-parity matrix's
+  `emtrends` row. New validation-notebook Section XXIX; the executed
+  notebook records 326 contracts (173 cross-validation + 111 structural + 42
+  Monte-Carlo), zero failures.
+
 ## [0.13.0] — 2026-06-28
 
 ### Fixed

@@ -40,6 +40,7 @@ def emtrends(
     response_derivative: bool = False,
     h: float = _DEFAULT_H,
     delta_var: float | None = None,
+    max_degree: int = 1,
 ) -> EMMResult:
     """Estimated marginal trends: slopes of ``var`` at each level combo of ``specs``.
 
@@ -168,9 +169,29 @@ def emtrends(
             mask = keys == key
             L_marg[i] = L_slope[mask].mean(axis=0)
     else:
+        keys = None
         unique_keys = pd.MultiIndex.from_tuples([("overall",)], names=["term"])
         L_marg = L_slope.mean(axis=0, keepdims=True)
         group_cols = ["term"]
+
+    # Higher-order polynomial trends (R `emtrends(..., max.degree=k)`):
+    # the degree-d trend is the d-th derivative of the linear predictor
+    # divided by d! (the Taylor / polynomial-coefficient convention, so a
+    # raw y = b2 x^2 fit reports quadratic = b2, not 2 b2). Isolated in a
+    # helper so the default (single-degree) path is untouched.
+    if max_degree != 1:
+        if max_degree < 1 or max_degree > 4:
+            raise ValueError(f"max_degree must be in 1..4; got {max_degree}.")
+        if response_derivative and info.family is not None:
+            raise NotImplementedError(
+                "response_derivative=True is supported only with max_degree=1; "
+                "higher-order response-scale trends need the inverse link's "
+                "higher derivatives."
+            )
+        return _emtrends_multidegree(
+            info, grid_center, var, group_cols, keys, unique_keys,
+            target, by_list, level, max_degree,
+        )
 
     mu = L_marg @ info.beta
     var_mu = np.einsum("ij,jk,ik->i", L_marg, info.vcov, L_marg)
@@ -267,4 +288,109 @@ def emtrends(
         by=by_list,
         level=level,
         type=result_type,
+    )
+
+
+# Central finite-difference stencils for the d-th derivative (offset ->
+# weight), and degree labels matching R `emtrends`.
+_FD_STENCILS: dict[int, dict[int, float]] = {
+    1: {-1: -0.5, 0: 0.0, 1: 0.5},
+    2: {-1: 1.0, 0: -2.0, 1: 1.0},
+    3: {-2: -0.5, -1: 1.0, 0: 0.0, 1: -1.0, 2: 0.5},
+    4: {-2: 1.0, -1: -4.0, 0: 6.0, 1: -4.0, 2: 1.0},
+}
+_DEGREE_LABELS = {1: "linear", 2: "quadratic", 3: "cubic", 4: "quartic"}
+
+
+def _emtrends_multidegree(
+    info: ModelInfo,
+    grid_center: pd.DataFrame,
+    var: str,
+    group_cols: list,
+    keys: Any,
+    unique_keys: Any,
+    target: list,
+    by_list: list,
+    level: float,
+    max_degree: int,
+) -> EMMResult:
+    """Stack the degree-1..k trends for ``emtrends(..., max_degree=k)``.
+
+    The degree-d trend is ``(d-th derivative of X beta) / d!``. Derivatives
+    use a central finite-difference stencil with a moderate step (exact for
+    a polynomial design of degree <= the stencil order, regardless of the
+    step); the result carries an extra ``degree`` column and matches R's
+    polynomial-coefficient convention.
+    """
+    import math
+
+    from pymmeans.estimability import estimable_mask, estimable_mask_from_basis
+
+    step = 1e-3  # robust for higher-order FD; exact on polynomial designs
+    offsets = sorted({j for d in range(1, max_degree + 1) for j in _FD_STENCILS[d]})
+    designs: dict[int, np.ndarray] = {}
+    for j in offsets:
+        g = grid_center.copy()
+        g[var] = g[var].astype(float) + j * step
+        [des] = build_design_matrices([info.design_info], g, return_type="matrix")
+        designs[j] = np.asarray(des)
+
+    df_value: float = (
+        np.inf if (info.family is not None or info.is_mixed) else info.df_resid
+    )
+    crit = float(stats.t.ppf(1.0 - (1.0 - level) / 2.0, df_value))
+
+    X_design = None
+    if info.raw_result is not None and hasattr(info.raw_result, "model"):
+        X_design = np.asarray(getattr(info.raw_result.model, "exog", None))
+
+    frames: list[pd.DataFrame] = []
+    linfcts: list[np.ndarray] = []
+    for d in range(1, max_degree + 1):
+        sten = _FD_STENCILS[d]
+        L_d = sum(w * designs[j] for j, w in sten.items()) / (step**d)
+        L_d = L_d / math.factorial(d)
+        if keys is not None:
+            L_marg = np.empty((len(unique_keys), info.n_params))
+            for i, key in enumerate(unique_keys):
+                L_marg[i] = L_d[keys == key].mean(axis=0)
+        else:
+            L_marg = L_d.mean(axis=0, keepdims=True)
+
+        mu = L_marg @ info.beta
+        se = np.sqrt(
+            np.clip(np.einsum("ij,jk,ik->i", L_marg, info.vcov, L_marg), 0.0, None)
+        )
+        est_mask = None
+        if X_design is not None and X_design.ndim == 2 and X_design.shape[1] == info.n_params:
+            est_mask = estimable_mask(L_marg, X_design)
+        elif info.estimability_basis is not None:
+            est_mask = estimable_mask_from_basis(L_marg, info.estimability_basis)
+        if est_mask is not None and not est_mask.all():
+            mu = np.where(est_mask, mu, np.nan)
+            se = np.where(est_mask, se, np.nan)
+
+        fd: dict[str, Any] = {
+            "degree": [_DEGREE_LABELS[d]] * len(unique_keys),
+        }
+        for i, col in enumerate(group_cols):
+            fd[col] = [k[i] for k in unique_keys]
+        fr = pd.DataFrame(fd)
+        fr[f"{var}.trend"] = mu
+        fr["SE"] = se
+        fr["df"] = np.full(len(unique_keys), df_value)
+        fr["lower_cl"] = mu - crit * se
+        fr["upper_cl"] = mu + crit * se
+        frames.append(fr)
+        linfcts.append(L_marg)
+
+    frame = pd.concat(frames, ignore_index=True)
+    return EMMResult(
+        frame=frame,
+        linfct=np.vstack(linfcts),
+        model_info=info,
+        target=target if target else ["term"],
+        by=["degree", *by_list],
+        level=level,
+        type="link",
     )

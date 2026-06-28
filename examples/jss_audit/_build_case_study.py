@@ -6183,7 +6183,56 @@ print(f"  pymmeans sympower deriv = {_sp.inverse_deriv(_zt)} (correct 2z); "
 
 # ================================================================== §XXIX
 md(r"""
-# Section XXIX — Validation scorecard
+# Section XXIX — Higher-order trends (`emtrends(max_degree=)`)
+
+R `emtrends(..., max.degree=k)` reports a polynomial trend for each degree
+1..k: the degree-d trend is the d-th derivative of the linear predictor
+divided by `d!` (the Taylor / polynomial-coefficient convention, so a raw
+`y = b2 x²` fit reports `quadratic = b2`, not `2 b2`). `pymmeans` adds the
+`max_degree=` argument with the same convention.
+
+* **§XXIX.1** — for `y = 2 + 3x + 5x²` the quadratic trend equals `b2 = 5`
+  exactly (the polynomial-coefficient convention), and the cubic trend of a
+  quadratic model is zero.
+* **§XXIX.2** — the degree-1 row of a multi-degree call is identical to the
+  single-degree `emtrends` (no regression in the default path).
+""")
+
+code(r"""
+# §XXIX.1 - polynomial-coefficient convention, exact on a noise-free fit.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emtrends
+
+_rng_t = np.random.default_rng(20260628)
+_xt = _rng_t.normal(2.0, 1.0, 200)
+_dft = pd.DataFrame({"x": _xt, "y": 2.0 + 3.0 * _xt + 5.0 * _xt**2})
+_fit_t = smf.ols("y ~ x + I(x**2)", _dft).fit()
+_rt = emtrends(_fit_t, None, var="x", max_degree=3).frame.set_index("degree")
+print(f"  quadratic trend = {float(_rt.loc['quadratic', 'x.trend']):.8f}  (beta2 = 5)")
+check("XXIX.1", "emtrends quadratic trend equals beta2 (Taylor-coefficient convention)",
+      abs(float(_rt.loc["quadratic", "x.trend"]) - 5.0), 1e-6, "R cross-validation")
+check("XXIX.1", "emtrends linear trend equals 3 + 10*mean(x), exactly",
+      abs(float(_rt.loc["linear", "x.trend"]) - (3.0 + 10.0 * _dft["x"].mean())), 1e-4, "structural")
+check("XXIX.1", "emtrends cubic trend of a quadratic model is zero",
+      abs(float(_rt.loc["cubic", "x.trend"])), 1e-4, "structural")
+""")
+
+code(r"""
+# §XXIX.2 - the default (single-degree) path is unchanged.
+_single = emtrends(_fit_t, None, var="x").frame
+_multi = emtrends(_fit_t, None, var="x", max_degree=2).frame
+_multi_lin = _multi[_multi["degree"] == "linear"]["x.trend"].to_numpy()
+check("XXIX.2", "max_degree=1 path has no 'degree' column (backward compatible)",
+      0.0 if "degree" not in _single.columns else 1.0, 0.0, "structural")
+check("XXIX.2", "multi-degree linear row equals the single-degree emtrends",
+      float(np.max(np.abs(_single["x.trend"].to_numpy() - _multi_lin))), 1e-6, "structural")
+""")
+
+# ================================================================== §XXX
+md(r"""
+# Section XXX — Validation scorecard
 """)
 
 code(r"""

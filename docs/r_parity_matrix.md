@@ -65,7 +65,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `test(emm, null=, side=, delta=)` | ✅ Full | `side` aliases include `noninferiority` and `nonsuperiority` |
 | `update(emm, **kwargs)` | ✅ Full | `type=` reroutes through the inverse-link helper; `adjust=` recomputes p-values via the family-aware re-adjustment path |
 | `joint_tests(model, by=...)` | ✅ Full | `by=` supported; by-cell ordering matches R `expand.grid`. `show0df`, `cov.reduce` are display-side knobs deferred to v0.2 |
-| `emtrends(model, var=, delta_var=)` | ✅ Full | `delta_var=` alias supported; estimability check on the trend `linfct` returns NaN (R: `nonEst`) for constant `var`. `max.degree > 1` deferred to v0.2 |
+| `emtrends(model, var=, delta_var=)` | ✅ Full | `delta_var=` alias supported; `max_degree=` (higher-order polynomial trends, k≤4) supported with R's Taylor-coefficient convention (jss_audit §XXIX); estimability check returns NaN (R: `nonEst`) for constant `var` |
 | `cld(emm)` | ✅ Full | Piepho (2004) algorithm; by-groups, `alpha=`, `reverse=` |
 | `pwpp(emm, method=, sort=, values=)` | ✅ Full | Any contrast method (not just pairwise); `sort=` for ascending tick order; `values=` annotates ticks with numeric estimates |
 | `pwpm(emm, type=)` | ✅ Full | Matrix display; `type='response'` produces a ratio matrix for log-family models |
