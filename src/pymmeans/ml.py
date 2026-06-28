@@ -661,3 +661,260 @@ def ml_contrast(
             rows_out.append(row)
 
     return pd.DataFrame(rows_out)
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap marginal effects for black-box predictive models.
+#
+# ``avg_slopes`` / ``avg_comparisons`` on a parametric fit use the exact
+# delta method via the coefficient covariance. A black-box ``predict_fn``
+# (scikit-learn, gradient boosting, a neural net) exposes no coefficient
+# covariance, so the only principled standard error is the *bootstrap*:
+# resample the data, refit the model via ``refit_fn``, recompute the
+# estimand, and take the spread across replicates. The point estimate uses
+# numerical g-computation on ``predict_fn`` alone; a valid standard error
+# additionally requires ``refit_fn`` (without it the standard error is NaN,
+# matching the point-only behaviour of other black-box tools).
+#
+# Note on smoothness: ``ml_avg_slopes`` is a numerical derivative and is
+# meaningful only for a *smooth* ``predict_fn`` (linear models, kernel
+# methods, neural nets). Tree ensembles are piecewise constant, so their
+# finite-difference derivative is zero almost everywhere and spikes at
+# splits -- use ``ml_avg_comparisons`` (a discrete change) for those.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MLMarginalResult:
+    """Result of :func:`ml_avg_slopes` or :func:`ml_avg_comparisons`.
+
+    ``frame`` columns: the ``by`` factor(s) when present, ``var`` (and
+    ``contrast`` for comparisons), the point estimate (``slope`` or
+    ``estimate``), bootstrap ``SE``, asymptotic ``t_ratio`` / ``p_value``,
+    and percentile-bootstrap ``lower_cl`` / ``upper_cl``. ``SE`` and the
+    interval are ``NaN`` when no ``refit_fn`` was supplied.
+    """
+
+    frame: pd.DataFrame
+    kind: str
+    var: str
+    n_boot: int
+    level: float
+
+
+def _ml_ordered_keys(data: pd.DataFrame, by_list: list) -> list:
+    """By-group keys in factor-level order (categories / sorted unique)."""
+    if not by_list:
+        return [()]
+    import itertools as _it
+
+    levels = [
+        list(data[c].cat.categories) if hasattr(data[c], "cat") else sorted(pd.unique(data[c]))
+        for c in by_list
+    ]
+    present = set(
+        map(tuple, data[by_list].astype(object).itertuples(index=False, name=None))
+    )
+    return [k for k in _it.product(*levels) if k in present]
+
+
+def _ml_mask(data: pd.DataFrame, by_list: list, key: tuple) -> np.ndarray:
+    if not by_list:
+        return np.ones(len(data), dtype=bool)
+    mask = np.ones(len(data), dtype=bool)
+    for c, v in zip(by_list, key, strict=True):
+        mask &= data[c].to_numpy() == v
+    return mask
+
+
+def _ml_bootstrap(
+    info: MLPredictInfo, point: Callable, n_boot: int, seed: int
+) -> np.ndarray | None:
+    """Pairs bootstrap: resample rows, refit, recompute the estimand.
+
+    Returns an ``(n_boot, K)`` array of replicate estimates, or ``None``
+    when no ``refit_fn`` is available (point estimate only).
+    """
+    if info.refit_fn is None:
+        return None
+    n = len(info.data)
+    rng = np.random.default_rng(seed)
+    out = np.empty((n_boot, len(point(info.predict_fn, info.data))))
+    for b in range(n_boot):
+        idx = rng.integers(0, n, n)
+        db = info.data.iloc[idx].reset_index(drop=True)
+        out[b] = point(info.refit_fn(db), db)
+    return out
+
+
+def _ml_frame(
+    est: np.ndarray,
+    boot: np.ndarray | None,
+    id_rows: list[dict],
+    value_name: str,
+    level: float,
+) -> pd.DataFrame:
+    import scipy.stats as _st
+
+    k = len(est)
+    if boot is not None:
+        se = np.nanstd(boot, axis=0, ddof=1)
+        lo = np.nanpercentile(boot, 100.0 * (1.0 - level) / 2.0, axis=0)
+        hi = np.nanpercentile(boot, 100.0 * (1.0 + level) / 2.0, axis=0)
+    else:
+        se = lo = hi = np.full(k, np.nan)
+    rows = []
+    for gi in range(k):
+        row = dict(id_rows[gi])
+        row[value_name] = float(est[gi])
+        row["SE"] = float(se[gi])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = est[gi] / se[gi] if se[gi] > 0 else np.nan
+        row["t_ratio"] = float(t)
+        row["p_value"] = float(2.0 * _st.norm.sf(abs(t))) if np.isfinite(t) else np.nan
+        row["lower_cl"] = float(lo[gi])
+        row["upper_cl"] = float(hi[gi])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def ml_avg_slopes(
+    info: MLPredictInfo,
+    var: str,
+    *,
+    by: str | list | None = None,
+    h: float | None = None,
+    n_boot: int = 1000,
+    level: float = 0.95,
+    seed: int = 0,
+) -> MLMarginalResult:
+    """Average marginal effect of a numeric ``var`` for a black-box model.
+
+    The point estimate is a numerical central-difference derivative of
+    ``info.predict_fn`` averaged over the sample (optionally within ``by``
+    groups). The standard error and percentile confidence interval come
+    from a pairs bootstrap using ``info.refit_fn`` (``NaN`` if none).
+
+    Only meaningful for a *smooth* ``predict_fn``; for tree ensembles use
+    :func:`ml_avg_comparisons`.
+    """
+    if not (0.0 < level < 1.0):
+        raise ValueError(f"level must be in (0, 1); got {level!r}.")
+    if var not in info.data.columns:
+        raise ValueError(f"{var!r} is not a column of the model data.")
+    if not pd.api.types.is_numeric_dtype(info.data[var]):
+        raise ValueError(
+            f"ml_avg_slopes requires a numeric var; {var!r} is "
+            f"{info.data[var].dtype}. Use ml_avg_comparisons for a factor."
+        )
+    by_list = [by] if isinstance(by, str) else (list(by) if by else [])
+    if h is None:
+        h = max(1e-6, 1e-4 * float(np.std(info.data[var].to_numpy(dtype=float))))
+    keys = _ml_ordered_keys(info.data, by_list)
+
+    def point(pf: Callable, data: pd.DataFrame) -> np.ndarray:
+        dp = data.copy(); dp[var] = data[var].to_numpy(dtype=float) + h
+        dm = data.copy(); dm[var] = data[var].to_numpy(dtype=float) - h
+        deriv = (np.asarray(pf(dp), dtype=float) - np.asarray(pf(dm), dtype=float)) / (2.0 * h)
+        out = np.empty(len(keys))
+        for gi, key in enumerate(keys):
+            mask = _ml_mask(data, by_list, key)
+            out[gi] = deriv[mask].mean() if mask.any() else np.nan
+        return out
+
+    est = point(info.predict_fn, info.data)
+    boot = _ml_bootstrap(info, point, n_boot, seed)
+    id_rows = [
+        {**{name: key[bi] for bi, name in enumerate(by_list)}, "var": var}
+        for key in keys
+    ]
+    frame = _ml_frame(est, boot, id_rows, "slope", level)
+    return MLMarginalResult(frame=frame, kind="slope", var=var, n_boot=n_boot, level=level)
+
+
+def ml_avg_comparisons(
+    info: MLPredictInfo,
+    var: str,
+    *,
+    comparison: str = "difference",
+    step: float = 1.0,
+    by: str | list | None = None,
+    n_boot: int = 1000,
+    level: float = 0.95,
+    seed: int = 0,
+) -> MLMarginalResult:
+    """Average counterfactual comparison of ``var`` for a black-box model.
+
+    g-computation point estimate (numeric: a centred ``step`` change;
+    categorical: each level versus the reference) with a pairs-bootstrap
+    standard error / percentile interval via ``info.refit_fn``. The
+    ``comparison`` function is one of ``"difference"`` / ``"ratio"`` /
+    ``"lnratio"`` / ``"lnor"`` / ``"lift"``.
+    """
+    from pymmeans.comparisons import _COMPARISONS, _reference_level
+
+    if not (0.0 < level < 1.0):
+        raise ValueError(f"level must be in (0, 1); got {level!r}.")
+    if comparison not in _COMPARISONS:
+        raise ValueError(
+            f"comparison must be one of {sorted(_COMPARISONS)}; got {comparison!r}."
+        )
+    if var not in info.data.columns:
+        raise ValueError(f"{var!r} is not a column of the model data.")
+    cmp = _COMPARISONS[comparison]
+    by_list = [by] if isinstance(by, str) else (list(by) if by else [])
+    keys = _ml_ordered_keys(info.data, by_list)
+    col = info.data[var]
+
+    # Build the contrast list: (label, hi_assign, lo_assign), where each
+    # *_assign maps a data frame to the counterfactual value of `var`.
+    if pd.api.types.is_numeric_dtype(col):
+        contrasts = [(
+            f"+{step:g}",
+            lambda d: d[var].to_numpy(dtype=float) + step / 2.0,
+            lambda d: d[var].to_numpy(dtype=float) - step / 2.0,
+        )]
+    else:
+        ref = _reference_level(col)
+        levels = list(col.cat.categories) if hasattr(col, "cat") else sorted(pd.unique(col))
+        cats = col.cat.categories if hasattr(col, "cat") else None
+
+        def _fill(value, n):
+            return pd.Categorical([value] * n, categories=cats) if cats is not None else [value] * n
+
+        contrasts = [
+            (
+                f"{lvl} - {ref}",
+                (lambda d, _l=lvl: _fill(_l, len(d))),
+                (lambda d, _r=ref: _fill(_r, len(d))),
+            )
+            for lvl in levels
+            if lvl != ref
+        ]
+
+    def point(pf: Callable, data: pd.DataFrame) -> np.ndarray:
+        out = []
+        for _label, hi_a, lo_a in contrasts:
+            dh = data.copy(); dh[var] = hi_a(data)
+            dl = data.copy(); dl[var] = lo_a(data)
+            phi_hi = np.asarray(pf(dh), dtype=float)
+            phi_lo = np.asarray(pf(dl), dtype=float)
+            for key in keys:
+                mask = _ml_mask(data, by_list, key)
+                if mask.any():
+                    out.append(cmp(phi_hi[mask].mean(), phi_lo[mask].mean()))
+                else:
+                    out.append(np.nan)
+        return np.asarray(out)
+
+    est = point(info.predict_fn, info.data)
+    boot = _ml_bootstrap(info, point, n_boot, seed)
+    id_rows = []
+    for label, _hi, _lo in contrasts:
+        for key in keys:
+            row = {name: key[bi] for bi, name in enumerate(by_list)}
+            row["term"] = var
+            row["contrast"] = label
+            id_rows.append(row)
+    frame = _ml_frame(est, boot, id_rows, "estimate", level)
+    return MLMarginalResult(frame=frame, kind="comparison", var=var, n_boot=n_boot, level=level)

@@ -6036,7 +6036,89 @@ except ImportError:
 
 # ================================================================== §XXVII
 md(r"""
-# Section XXVII — Validation scorecard
+# Section XXVII — Bootstrap marginal effects for black-box models
+
+A black-box predictor (a gradient-boosted ensemble, a neural network, any
+`.predict()` model) exposes no coefficient covariance, so the delta method
+does not apply. `ml_avg_slopes` / `ml_avg_comparisons` give the point
+estimate by numerical g-computation on `predict_fn` and the standard error
+by a *pairs bootstrap*: resample the data, refit via `refit_fn`, recompute
+the estimand, and take the spread across replicates. (Without `refit_fn`
+the point estimate is still returned, with a `NaN` standard error.)
+
+* **§XXVII.1** — for a linear learner the ML average marginal effect equals
+  the ordinary-least-squares coefficient exactly, and the pairs-bootstrap
+  standard error recovers the analytic coefficient standard error to within
+  Monte-Carlo tolerance.
+* **§XXVII.2** — a calibration check: across repeated simulated datasets,
+  the 95% percentile-bootstrap interval covers the true effect at the
+  nominal rate. This is the appropriate validation for a bootstrap standard
+  error, since there is no closed form to match.
+""")
+
+code(r"""
+# §XXVII.1 - point = OLS coefficient; bootstrap SE recovers analytic SE.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from sklearn.linear_model import LinearRegression
+from pymmeans import from_predict, ml_avg_comparisons, ml_avg_slopes
+
+_feats = ["x", "z"]
+
+def _ols_refit(_d):
+    _m = LinearRegression().fit(_d[_feats], _d["y"])
+    return lambda _nd: _m.predict(_nd[_feats])
+
+_rng_ml = np.random.default_rng(20260628)
+_nml = 600
+_df_ml = pd.DataFrame({"x": _rng_ml.standard_normal(_nml), "z": _rng_ml.standard_normal(_nml)})
+_df_ml["y"] = 1.5 * _df_ml["x"] - 0.7 * _df_ml["z"] + _rng_ml.standard_normal(_nml)
+_info_ml = from_predict(predict_fn=_ols_refit(_df_ml), data=_df_ml, factors={},
+                        numerics=_feats, response="y", refit_fn=_ols_refit)
+_ols_ml = smf.ols("y ~ x + z", _df_ml).fit()
+
+_r = ml_avg_slopes(_info_ml, "x", n_boot=600, seed=7).frame.iloc[0]
+print(f"  ML AME point = {_r['slope']:.8f}  (OLS coef {float(_ols_ml.params['x']):.8f})")
+check("XXVII.1", "black-box ML average marginal effect equals the OLS coefficient",
+      abs(float(_r["slope"]) - float(_ols_ml.params["x"])), 1e-7, "structural")
+_rel = abs(float(_r["SE"]) - float(_ols_ml.bse["x"])) / float(_ols_ml.bse["x"])
+print(f"  bootstrap SE = {float(_r['SE']):.6f}  analytic OLS SE {float(_ols_ml.bse['x']):.6f}  (rel {_rel:.1%})")
+check("XXVII.1", "pairs-bootstrap SE recovers the analytic OLS SE (within MC tolerance)",
+      _rel, 0.12, "R cross-validation")
+# point-only without refit_fn -> NaN SE
+_info_pt = from_predict(predict_fn=_ols_refit(_df_ml), data=_df_ml, factors={},
+                        numerics=_feats, response="y")
+_rp = ml_avg_slopes(_info_pt, "x", n_boot=10).frame.iloc[0]
+check("XXVII.1", "no refit_fn yields a point estimate with a NaN standard error",
+      0.0 if (np.isfinite(_rp["slope"]) and np.isnan(_rp["SE"])) else 1.0, 0.0, "structural")
+""")
+
+code(r"""
+# §XXVII.2 - Monte-Carlo coverage of the 95% percentile-bootstrap interval.
+_BETA = 1.5
+def _one_rep(_seed):
+    _rng = np.random.default_rng(_seed)
+    _n = 250
+    _d = pd.DataFrame({"x": _rng.standard_normal(_n), "z": _rng.standard_normal(_n)})
+    _d["y"] = _BETA * _d["x"] - 0.7 * _d["z"] + _rng.standard_normal(_n)
+    _i = from_predict(predict_fn=_ols_refit(_d), data=_d, factors={},
+                      numerics=_feats, response="y", refit_fn=_ols_refit)
+    _row = ml_avg_comparisons(_i, "x", n_boot=120, seed=_seed * 7 + 1).frame.iloc[0]
+    return float(_row["lower_cl"]) <= _BETA <= float(_row["upper_cl"])
+
+_K = 200
+_covered = [_one_rep(_s) for _s in range(_K)]
+_cov = float(np.mean(_covered))
+_band = 1.96 * np.sqrt(0.95 * 0.05 / _K)
+print(f"  coverage of 95% bootstrap CI over {_K} datasets: {_cov:.3f}  (nominal 0.95 +/- {_band:.3f})")
+check("XXVII.2", "bootstrap CI achieves nominal coverage (Monte-Carlo calibration)",
+      max(0.0, abs(_cov - 0.95) - _band - 0.015), 0.0, "Monte-Carlo")
+""")
+
+# ================================================================== §XXVIII
+md(r"""
+# Section XXVIII — Validation scorecard
 """)
 
 code(r"""

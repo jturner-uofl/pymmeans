@@ -48,8 +48,11 @@ from pymmeans.imputation import PooledImputationResult, pool_imputed
 from pymmeans.joint import eta_squared, joint_tests
 from pymmeans.ml import (
     MLEMMResult,
+    MLMarginalResult,
     MLPredictInfo,
     from_predict,
+    ml_avg_comparisons,
+    ml_avg_slopes,
     ml_contrast,
     ml_emmeans,
     ml_pairs,
@@ -163,7 +166,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 __all__ = [
     "CONTRAST_METHODS",
@@ -184,6 +187,7 @@ __all__ = [
     "KRDiagnostics",
     "LinearmodelsAdapter",
     "MLEMMResult",
+    "MLMarginalResult",
     "MLPredictInfo",
     "ModelAdapter",
     "MultivariateEMM",
@@ -255,6 +259,8 @@ __all__ = [
     "lsmip",
     "lstrends",
     "make_tran",
+    "ml_avg_comparisons",
+    "ml_avg_slopes",
     "ml_contrast",
     "ml_emmeans",
     "ml_pairs",

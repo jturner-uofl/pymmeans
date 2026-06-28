@@ -5,6 +5,40 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-06-28
+
+### Added
+
+- `ml_avg_slopes()` / `ml_avg_comparisons()` — marginal effects for
+  black-box predictive models (scikit-learn, gradient boosting, neural
+  nets; anything with a `.predict()`). A black-box model exposes no
+  coefficient covariance, so the delta method does not apply: the point
+  estimate is numerical g-computation on `predict_fn`, and the standard
+  error / percentile confidence interval come from a **pairs bootstrap**
+  that resamples the data and refits via `refit_fn`. Without a `refit_fn`
+  the point estimate is still returned, with a `NaN` standard error. The
+  bootstrap is validated three ways: the point estimate equals the OLS
+  coefficient for a linear learner (exactly); the bootstrap standard error
+  recovers the analytic OLS standard error (within Monte-Carlo tolerance);
+  and the 95% percentile-bootstrap interval achieves nominal coverage in a
+  Monte-Carlo calibration study. This closes the last roadmap item — the
+  black-box "reach" — that `marginaleffects` itself does not provide an
+  inference path for.
+
+  `ml_avg_slopes` is a numerical derivative and is meaningful only for a
+  *smooth* `predict_fn`; for piecewise-constant tree ensembles use
+  `ml_avg_comparisons` (a discrete change). For binary/categorical
+  treatment effects, the efficient influence-function path
+  (`cross_fit_ml_emmeans`, `aipw_ate`) remains available and is preferred
+  when a propensity/outcome learner pair is on hand.
+
+### Documentation
+
+- New validation-notebook Section XXVII with the OLS-identity, analytic-SE-
+  recovery, and Monte-Carlo coverage contracts for the bootstrap marginal
+  effects; the executed notebook records 315 contracts (167
+  cross-validation + 106 structural + 42 Monte-Carlo), zero failures.
+
 ## [0.11.0] — 2026-06-27
 
 ### Added
