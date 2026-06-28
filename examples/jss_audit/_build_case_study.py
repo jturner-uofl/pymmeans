@@ -6485,7 +6485,61 @@ check("XXXIII.2", "response-scale sim intervals lie in (0,1) and are asymmetric"
 
 # ================================================================== §XXXIV
 md(r"""
-# Section XXXIV — Validation scorecard
+# Section XXXIV — Robust / cluster-robust EMMs
+
+Applied work routinely needs heteroskedasticity- or cluster-robust standard
+errors on marginal means. `pymmeans` propagates a robust covariance to the
+EMMs and their contrasts: **automatically** when the statsmodels fit carries
+one (`cov_type="cluster"` / `"HC3"`), and explicitly via `vcov=` — as a
+matrix or, R-style, a `vcov.=fn` callable evaluated on the model. The
+marginal SE is exactly the sandwich identity `sqrt(diag(L V_robust Lᵀ))`.
+
+* **§XXXIV.1** — a cluster-robust OLS fit auto-propagates: the EMM SEs equal
+  `sqrt(diag(L V_cluster Lᵀ))` to machine precision, and the contrasts
+  inherit the same robust covariance.
+* **§XXXIV.2** — the `vcov=` callable form (`vcov=lambda m: ...`, R's
+  `vcov.=fn`) equals the explicit-matrix form exactly.
+""")
+
+code(r"""
+# §XXXIV.1 - cluster-robust auto-propagation = sandwich identity.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, pairs, summary
+
+_rng_v = np.random.default_rng(0)
+_nv, _Gv = 300, 20
+_clv = _rng_v.integers(0, _Gv, _nv)
+_dfv = pd.DataFrame({"g": pd.Categorical(_rng_v.choice(["A", "B", "C"], _nv)), "cl": _clv})
+_uv = _rng_v.standard_normal(_Gv)[_clv]
+_dfv["y"] = _dfv["g"].map({"A": 1.0, "B": 2.0, "C": 3.0}).astype(float) + _uv + _rng_v.standard_normal(_nv)
+_fitc = smf.ols("y ~ g", _dfv).fit(cov_type="cluster", cov_kwds={"groups": _dfv["cl"]})
+_emc = emmeans(_fitc, "g")
+_Vc = np.asarray(_fitc.cov_params(), dtype=float)
+_exp = np.sqrt(np.diag(_emc.linfct @ _Vc @ _emc.linfct.T))
+check("XXXIV.1", "cluster-robust EMM SE equals sqrt(diag(L V_cluster L^T))",
+      float(np.max(np.abs(_emc.frame["SE"].to_numpy() - _exp))), 1e-12, "structural")
+# contrast inherits the robust covariance
+_ctc = summary(pairs(_emc))
+_d01 = _emc.linfct[0] - _emc.linfct[1]
+check("XXXIV.1", "robust covariance flows through to contrasts (A-B)",
+      abs(float(_ctc["SE"].iloc[0]) - float(np.sqrt(_d01 @ _Vc @ _d01))), 1e-10, "structural")
+""")
+
+code(r"""
+# §XXXIV.2 - vcov=callable (R vcov.=fn) equals the matrix form.
+_base = smf.ols("y ~ g", _dfv).fit()
+_Vhc3 = np.asarray(smf.ols("y ~ g", _dfv).fit(cov_type="HC3").cov_params(), dtype=float)
+_se_mat = emmeans(_base, "g", vcov=_Vhc3).frame["SE"].to_numpy()
+_se_fn = emmeans(_base, "g", vcov=lambda m: _Vhc3).frame["SE"].to_numpy()
+check("XXXIV.2", "vcov= callable form equals the explicit-matrix form",
+      float(np.max(np.abs(_se_mat - _se_fn))), 0.0, "structural")
+""")
+
+# ================================================================== §XXXV
+md(r"""
+# Section XXXV — Validation scorecard
 """)
 
 code(r"""

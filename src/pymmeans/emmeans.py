@@ -1095,7 +1095,7 @@ def emmeans(
     nuisance: str | list[str] | None = None,
     counterfactuals: dict[str, Any] | None = None,
     nesting: dict[str, str | list[str]] | None = None,
-    vcov: np.ndarray | None = None,
+    vcov: np.ndarray | Callable[[Any], Any] | None = None,
     submodel: str | None = None,
 ) -> EMMResult | RefGrid:
     """Compute estimated marginal means.
@@ -1277,13 +1277,18 @@ def emmeans(
         Refused when ``info.data`` is empty (post-pickle), since the
         reduced design must be rebuilt from the training frame.
     vcov
-        Optional ``(p, p)`` ndarray to override the model's default
+        Optional ``(p, p)`` ndarray — or a callable evaluated on the
+        fitted ``model`` returning one — to override the model's default
         coefficient covariance. Use this to plug in robust /
-        sandwich / cluster-robust / HAC SEs computed outside the fit
-        without rebuilding the model. Mirrors R
-        ``emmeans(fit, "g", vcov. = sandwich::vcovHC(fit))``.
+        sandwich / cluster-robust / HAC SEs without rebuilding the
+        model. Mirrors R ``emmeans(fit, "g", vcov. = ...)``: pass a
+        matrix (``vcov=sandwich_cov``) or, R-style, a function
+        (``vcov=lambda m: sandwich_cov(m)``). A statsmodels fit created
+        with ``cov_type="cluster"`` / ``"HC3"`` already carries its
+        robust covariance, so ``emmeans(robust_fit, ...)`` propagates it
+        automatically without this kwarg.
 
-        Validation: must be a square 2-D array of shape
+        Validation: the resolved matrix must be a square 2-D array of shape
         ``(n_params, n_params)``, symmetric to ``1e-8``, and
         positive-semidefinite (min eigenvalue ``> -1e-8``).
         ``info.vcov`` is replaced via ``dataclasses.replace`` so the
@@ -1397,7 +1402,12 @@ def emmeans(
     if vcov is not None:
         import dataclasses as _dc
 
-        v = np.asarray(vcov, dtype=float)
+        # R-style ``vcov. = fn``: a callable is evaluated on the fitted
+        # model to produce the covariance matrix (e.g.
+        # ``vcov=lambda m: sandwich_cov(m)`` for a robust / cluster
+        # estimator). A plain matrix is used as-is.
+        vcov_input = vcov(model) if callable(vcov) else vcov
+        v = np.asarray(vcov_input, dtype=float)
         p = info.n_params
         if v.ndim != 2 or v.shape != (p, p):
             raise ValueError(

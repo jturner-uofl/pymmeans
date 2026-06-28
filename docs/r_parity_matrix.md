@@ -80,6 +80,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `as_r_frame(emm)` | ✅ Full | Dot-name rename plus family-specific value-column renames (`prob` Binomial, `rate` Poisson, `response` Gamma / Inverse-Gaussian / log-LHS OLS) and `asymp.LCL` / `asymp.UCL` / `z.ratio` for `df=inf` Wald frames |
 | `emm_options(...)` | ✅ Full | ContextVar-based, thread-isolated |
 | `qdrg(formula, data, coef, vcov, df)` | ✅ Full | Builds a `ModelInfo` from raw inputs via patsy; mirrors R's `qdrg` signature |
+| `emmeans(..., vcov. =)` (robust / cluster-robust) | ✅ Full | `vcov=` accepts a matrix or an R-style `vcov.=fn` callable (evaluated on the model); robust/HC/cluster covariance propagates to EMMs and contrasts via the sandwich identity `sqrt(diag(L V Lᵀ))`. A statsmodels fit with `cov_type="cluster"`/`"HC3"` auto-propagates without the kwarg (jss_audit §XXXIV) |
 | `emmobj()` / `as.emmGrid()` | ✅ Full | `emmobj(bhat, V, levels)` — formula-less low-level constructor matching R `emmobj` |
 | `rbind(c1, c2, ..., adjust=)` | ✅ Full | Concatenates `ContrastResult`s and applies a joint multiplicity adjustment over the combined family |
 | `emm_list` | ✅ Full | `EmmList` named / positional container; `summary` / `confint` / `test` recurse; `as_r_frame(EmmList)` combines members into one DataFrame |

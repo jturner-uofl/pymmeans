@@ -5,6 +5,27 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-06-28
+
+### Added / R-emmeans parity
+
+- **`vcov=` now accepts an R-style callable** (`vcov.=fn`). In addition to a
+  covariance matrix, `emmeans(..., vcov=fn)` evaluates `fn` on the fitted
+  model to obtain the robust / sandwich / cluster-robust covariance — e.g.
+  `vcov=lambda m: m.get_robustcov_results("HC3").cov_params()`. Matches the
+  explicit-matrix form exactly.
+
+### Documentation / validation
+
+- Documented and validated the **robust / cluster-robust EMM** path
+  end-to-end: a statsmodels fit with `cov_type="cluster"`/`"HC3"`
+  auto-propagates its robust covariance to the marginal means *and* their
+  contrasts, with the marginal SE equal to the sandwich identity
+  `sqrt(diag(L V Lᵀ))` to machine precision. New parity-matrix row, new
+  tests (`tests/test_robust_vcov.py`), and validation-notebook Section
+  XXXIV. The executed notebook records 340 contracts (176 cross-validation
+  + 119 structural + 45 Monte-Carlo), zero failures.
+
 ## [0.17.0] — 2026-06-28
 
 ### Added / R-emmeans parity
