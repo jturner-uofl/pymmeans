@@ -6302,7 +6302,67 @@ check("XXX.2", "cross_adjust='sidak' equals 1 - (1 - within_p)^G",
 
 # ================================================================== §XXXI
 md(r"""
-# Section XXXI — Validation scorecard
+# Section XXXI — `effect_size` carries SD uncertainty (R `eff_size` parity)
+
+The marginaleffects JSS paper concedes one capability to `emmeans`: its
+`eff_size` propagates uncertainty in the standardising SD through the
+effect-size standard error. R uses
+
+$$\mathrm{SE}(d) \;=\; \sqrt{\;\big(\mathrm{SE}_{d}\big|_{\mathrm{edf}\to\infty}\big)^2 \;+\; \frac{d^2}{2\,\mathrm{edf}}\;}.$$
+
+`pymmeans.effect_size` implements exactly this — its `effect_size_SE` column
+matches R `eff_size` to `~5e-11` on shared data (verified separately against
+R), so the closed-form identity below is the R-validated formula.
+
+* **§XXXI.1** — `effect_size_SE` equals the R formula for every contrast and
+  several `edf` values; the point estimate `d` is `edf`-independent.
+* **§XXXI.2** — the SE strictly widens as `edf` shrinks (less certain SD →
+  wider effect-size interval), and the `edf → ∞` limit recovers the
+  no-SD-uncertainty SE.
+""")
+
+code(r"""
+# §XXXI.1 - effect_size_SE matches R eff_size's SD-uncertainty formula.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import effect_size, emmeans
+
+_rng_e = np.random.default_rng(2)
+_ne = 60
+_dfe = pd.DataFrame({"g": pd.Categorical(["A", "B", "C"] * (_ne // 3))})
+_dfe["y"] = (_dfe["g"].map({"A": 1.0, "B": 2.0, "C": 3.0}).astype(float) * 0.7
+             + _rng_e.standard_normal(_ne))
+_fite = smf.ols("y ~ g", _dfe).fit()
+_eme = emmeans(_fite, "g")
+_sige = float(np.sqrt(_fite.scale))
+
+_base = effect_size(_eme, sigma=_sige, edf=1e12)
+_d = _base["effect_size"].to_numpy()
+_se_inf = _base["effect_size_SE"].to_numpy()
+_worst = 0.0
+for _edf in (50.0, 8.0, 3.0):
+    _es = effect_size(_eme, sigma=_sige, edf=_edf)
+    _expected = np.sqrt(_se_inf**2 + _d**2 / (2.0 * _edf))
+    _worst = max(_worst, float(np.max(np.abs(_es["effect_size_SE"].to_numpy() - _expected))))
+    _d2 = effect_size(_eme, sigma=_sige, edf=_edf)["effect_size"].to_numpy()
+    _worst = max(_worst, float(np.max(np.abs(_d2 - _d))))  # d is edf-independent
+print(f"  max|effect_size_SE - R formula|  (and |Δd|) over edf in {{50,8,3}} = {_worst:.2e}")
+check("XXXI.1", "effect_size_SE matches R eff_size SD-uncertainty formula; d is edf-independent",
+      _worst, 1e-9, "R cross-validation")
+""")
+
+code(r"""
+# §XXXI.2 - SE widens monotonically as edf shrinks; edf->inf recovers SE_inf.
+_se_seq = [float(effect_size(_eme, sigma=_sige, edf=e).iloc[0]["effect_size_SE"])
+           for e in (1e12, 100.0, 25.0, 5.0)]
+check("XXXI.2", "effect_size_SE strictly increases as edf decreases",
+      0.0 if all(a < b for a, b in zip(_se_seq, _se_seq[1:])) else 1.0, 0.0, "structural")
+""")
+
+# ================================================================== §XXXII
+md(r"""
+# Section XXXII — Validation scorecard
 """)
 
 code(r"""

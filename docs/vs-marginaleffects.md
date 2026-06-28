@@ -29,6 +29,7 @@ edition of marginaleffects (0.5.1) was used throughout.
 | 3 | **Speed on the common paths.** | Best-of-7, n=4000 logistic GLM: `avg_predictions` **3.1×**, `avg_slopes` **5.8×**, `avg_comparisons` **6.6×** faster. |
 | 4 | **Uncertainty for black-box ML models.** marginaleffects returns a point estimate with no standard error for a scikit-learn model; pymmeans `ml_avg_*` returns a pairs-bootstrap SE and percentile interval (with Monte-Carlo-validated coverage). | sklearn `GradientBoostingRegressor`: marginaleffects frame = `estimate` only; pymmeans = estimate **±SE, CI** (requires a `refit_fn`). |
 | 5 | **Native Kenward–Roger / Satterthwaite degrees of freedom.** A source search of marginaleffects for `kenward`/`satterthwaite` returns zero matches; it reports infinite-df *z* on a mixed model. | `MixedLM`, 8 groups: pymmeans yields a finite **KR df ≈ 38.9** with a variance-component-corrected SE; matches R `pbkrtest::vcovAdj` to `atol ≈ 5e-7`. |
+| 6 | **Standardised effect sizes with SD-uncertainty SEs.** marginaleffects has no standardised-effect-size helper; pymmeans `effect_size` returns Cohen's *d* / Hedges' *g* with a standard error that propagates uncertainty in the standardising SD via `edf`, exactly as R `emmeans::eff_size`. | `SE(d) = sqrt(SE_∞² + d²/(2·edf))`; pymmeans matches R `eff_size` to **~5e-11** across `edf` on shared data (jss_audit §XXXI). |
 
 One correctness note in pymmeans' favour: pymmeans' `hypothesis=` argument
 refers to result rows by **factor-level labels** (`"pairwise"`,

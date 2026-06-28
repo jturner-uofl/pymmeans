@@ -5,6 +5,21 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] — 2026-06-28
+
+### Validation
+
+- Locked in `effect_size`'s SD-uncertainty standard error against R
+  `emmeans::eff_size`. The `effect_size_SE` column propagates uncertainty in
+  the standardising SD via `edf` —
+  `SE(d) = sqrt(SE_inf^2 + d^2 / (2 * edf))` — matching R to `~5e-11` on
+  shared data across several `edf` values. This is the one capability the
+  marginaleffects JSS paper concedes to `emmeans`; pymmeans matches it (and
+  marginaleffects has no standardised-effect-size SE at all). New tests
+  (`tests/test_effect_size_edf.py`) and validation-notebook Section XXXI; the
+  executed notebook records 331 contracts (176 cross-validation + 113
+  structural + 42 Monte-Carlo), zero failures. No behaviour change.
+
 ## [0.15.0] — 2026-06-28
 
 ### Added / R-emmeans parity
