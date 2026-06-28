@@ -155,5 +155,6 @@ nav:
       - Performance: PERFORMANCE_REPORT.md
       - Validation: vs-r.md
       - Parity matrix: r_parity_matrix.md
+  - vs marginaleffects: vs-marginaleffects.md
   - Project:
       - v0.2 roadmap: v0_2_roadmap.md

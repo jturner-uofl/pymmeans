@@ -6118,7 +6118,72 @@ check("XXVII.2", "bootstrap CI achieves nominal coverage (Monte-Carlo calibratio
 
 # ================================================================== §XXVIII
 md(r"""
-# Section XXVIII — Validation scorecard
+# Section XXVIII — Parametric response transforms
+
+`pymmeans` ships R `emmeans` / `car`'s parametric power transforms for
+response-scale back-transformation: `power`, `sympower`, `yj.power`
+(Yeo–Johnson), and `bcnPower` (Box–Cox with Negatives, Hawkins–Weisberg).
+Each is validated against the authoritative R / `car` implementation.
+
+* **§XXVIII.1** — `power` matches R `make.tran('power')` exactly (inverse
+  and derivative); `bcnPower` matches `car::bcnPowerInverse`; `yj.power`
+  round-trips through `car::yjPower`.
+* **§XXVIII.2** — `sympower`: the back-transformed estimates match R
+  exactly, but the *derivative* is the mathematically-correct
+  `(1/λ)|z|^{1/λ−1}`; R `emmeans`' `sympower` `mu.eta` drops the `1/λ`
+  factor (an emmeans bug), so `pymmeans` is the more correct of the two and
+  intentionally does not replicate it.
+""")
+
+code(r"""
+# §XXVIII.1 - power / bcnPower / yj.power vs R + car (committed references).
+import numpy as np
+from pymmeans.transforms import make_tran
+
+_zt = np.array([0.3, 0.8, 1.5, 2.2])
+
+# power(0.5): R make.tran linkinv = z**2, mu.eta = 2z.
+_pw = make_tran("power", lambda_=0.5)
+check("XXVIII.1", "power inverse matches R make.tran('power')",
+      float(np.max(np.abs(_pw.inverse(_zt) - _zt**2))), 1e-12, "R cross-validation")
+check("XXVIII.1", "power derivative matches R make.tran('power')",
+      float(np.max(np.abs(_pw.inverse_deriv(_zt) - 2.0 * _zt))), 1e-12, "R cross-validation")
+
+# bcnPower(0.5, 1): committed car::bcnPowerInverse reference.
+_zb = np.array([0.3, 0.8, 1.5])
+_car_bcn = np.array([1.1334640832, 1.8324489796, 2.9808673469])
+_bcn = make_tran("bcnPower", lambda_=0.5, gamma=1.0)
+print(f"  bcnPower inverse vs car::bcnPowerInverse: max|Δ| = "
+      f"{float(np.max(np.abs(_bcn.inverse(_zb) - _car_bcn))):.2e}")
+check("XXVIII.1", "bcnPower inverse matches car::bcnPowerInverse (Hawkins-Weisberg)",
+      float(np.max(np.abs(_bcn.inverse(_zb) - _car_bcn))), 1e-9, "R cross-validation")
+
+# yj.power(0.5): round-trip through committed car::yjPower forward.
+_y = np.array([-1.5, -0.2, 0.0, 0.7, 2.0])
+_car_yj_fwd = np.array([-1.9685647168, -0.2096894253, 0.0, 0.6076809621, 1.4641016151])
+_yj = make_tran("yj.power", lambda_=0.5)
+check("XXVIII.1", "yj.power round-trips through car::yjPower forward",
+      float(np.max(np.abs(_yj.inverse(_car_yj_fwd) - _y))), 1e-9, "R cross-validation")
+""")
+
+code(r"""
+# §XXVIII.2 - sympower: correct derivative (R emmeans has a mu.eta bug).
+_sp = make_tran("sympower", lambda_=0.5)
+# back-transformed estimates match R exactly
+check("XXVIII.2", "sympower inverse matches R make.tran('sympower')",
+      float(np.max(np.abs(_sp.inverse(_zt) - np.sign(_zt) * np.abs(_zt) ** 2))),
+      1e-12, "R cross-validation")
+# derivative is the correct (1/lambda)|z|^(1/lambda-1) = 2z, self-consistent
+_num = (_sp.inverse(_zt + 1e-6) - _sp.inverse(_zt - 1e-6)) / 2e-6
+check("XXVIII.2", "sympower derivative is the mathematically-correct one (not R's bug)",
+      float(np.max(np.abs(_sp.inverse_deriv(_zt) - _num))), 1e-7, "structural")
+print(f"  pymmeans sympower deriv = {_sp.inverse_deriv(_zt)} (correct 2z); "
+      f"R emmeans mu.eta = {_zt} (drops the 1/lambda factor)")
+""")
+
+# ================================================================== §XXIX
+md(r"""
+# Section XXIX — Validation scorecard
 """)
 
 code(r"""

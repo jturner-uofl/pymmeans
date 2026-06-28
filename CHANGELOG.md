@@ -5,6 +5,43 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-06-28
+
+### Fixed
+
+- **`make_tran("bcnPower", ...)`** computed the wrong transform. It applied
+  a plain Box-Cox to a shifted response `y + gamma`, but the Box-Cox-with-
+  Negatives transform (Hawkins & Weisberg 2017; R `car::bcnPower`) applies
+  the Box-Cox to the *smoothed* response `s = 0.5(y + sqrt(y² + gamma²))`,
+  with inverse `y = s − gamma²/(4s)` and a derivative that carries the
+  smoothing term. The inverse and its derivative are corrected and now
+  match `car::bcnPowerInverse` to `~1e-11`. Any response-scale
+  back-transform that used `bcnPower` previously produced incorrect values.
+
+### Validated / documented (R-emmeans parity)
+
+- The parametric power transforms `power`, `sympower`, `yj.power`
+  (Yeo–Johnson), and `bcnPower` are now cross-validated against R
+  `emmeans::make.tran` / `car`: `power` matches `make.tran('power')`
+  exactly; `yj.power` round-trips through `car::yjPower`; `bcnPower` matches
+  `car::bcnPowerInverse`. `sympower`'s back-transformed estimates match R
+  exactly, but pymmeans uses the mathematically-correct derivative
+  `(1/λ)|z|^{1/λ−1}` — R `emmeans`' `sympower` `mu.eta` drops the `1/λ`
+  factor (an emmeans bug), which pymmeans intentionally does not replicate.
+- **Parity re-audit.** The R-parity matrix had undercounted: the parametric
+  transforms (and `atanh`/`asin_sqrt`) were already implemented but listed
+  as missing. Corrected to **85/100 strict (89/100 with partial)**, and the
+  README/paper reconciled to the matrix (the audited source of truth).
+
+### Documentation
+
+- New validation-notebook Section XXVIII with the transform contracts; the
+  executed notebook records 321 contracts (172 cross-validation + 107
+  structural + 42 Monte-Carlo), zero failures.
+- New `docs/vs-marginaleffects.md` competitive comparison; the user-facing
+  showcase notebook refreshed with the v0.8–v0.12 surface (and a stale
+  broken cell fixed).
+
 ## [0.12.0] — 2026-06-28
 
 ### Added

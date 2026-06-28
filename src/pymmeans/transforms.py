@@ -477,32 +477,39 @@ def _sympower_inv_deriv(lam: float, x: np.ndarray) -> np.ndarray:
     return inv_lam * np.power(abs_x, inv_lam - 1.0)
 
 
-# ``bcnPower(y, lambda, gamma)`` — "Box-Cox with negatives", from
-# Hawkins & Weisberg (2017). Forward: ``z = ((y + gamma)^lambda - 1)
-# / lambda`` for lambda != 0, else ``log(y + gamma)``. Implementation
-# notes:
-#   - Reuses :func:`_boxcox_inv` for the lambda-dependent shape; the
-#     additive gamma shift drops out of the derivative (so we reuse
-#     :func:`_boxcox_inv_deriv` directly via partial).
-#   - Domain: forward requires ``y + gamma > 0``; inverse returns
-#     NaN where the Box-Cox base ``lam * z + 1`` is non-positive.
+# ``bcnPower(y, lambda, gamma)`` — "Box-Cox with Negatives", from
+# Hawkins & Weisberg (2017) and R ``car::bcnPower``. The transform
+# applies a Box-Cox to a *smoothed* response
+#   ``s = 0.5 * (y + sqrt(y^2 + gamma^2))``  (strictly positive for
+# gamma > 0, so negative y are handled), giving forward
+#   ``z = (s^lambda - 1) / lambda``  (``log(s)`` for lambda == 0).
+# This is NOT a plain Box-Cox on ``y + gamma``; the smoothing term
+# carries through to the inverse and its derivative.
 def _bcn_power_inv(
     lam: float, gamma: float, x: np.ndarray,
 ) -> np.ndarray:
-    """Inverse of bcnPower(., lambda, gamma).
+    """Inverse of bcnPower(., lambda, gamma) (Hawkins--Weisberg).
 
-    ``y = (lam * z + 1)^(1/lam) - gamma`` for ``lam != 0``;
-    ``y = exp(z) - gamma`` for ``lam == 0``. NaN where the
-    underlying Box-Cox inverse is NaN.
+    ``s = (lam * z + 1)^(1/lam)`` (``exp(z)`` for ``lam == 0``), then
+    ``y = s - gamma^2 / (4 s)``. Matches ``car::bcnPowerInverse``. NaN
+    where the underlying Box-Cox inverse ``s`` is NaN.
     """
-    return _boxcox_inv(lam, x) - gamma
+    s = _boxcox_inv(lam, x)
+    return s - gamma**2 / (4.0 * s)
 
 
-# Inverse derivative is identical to plain Box-Cox's (gamma is a
-# constant shift that vanishes under differentiation). The
-# ``make_tran('bcnPower', ...)`` branch reuses
-# :func:`_boxcox_inv_deriv` via ``functools.partial`` — no separate
-# helper needed.
+def _bcn_power_inv_deriv(
+    lam: float, gamma: float, x: np.ndarray,
+) -> np.ndarray:
+    """d/dz of the bcnPower inverse.
+
+    With ``s = boxcox_inv(lam, z)`` and ``y = s - gamma^2/(4 s)``,
+    ``dy/dz = (1 + gamma^2 / (4 s^2)) * ds/dz`` — the smoothing term
+    does *not* vanish (unlike a plain additive shift).
+    """
+    s = _boxcox_inv(lam, x)
+    ds = _boxcox_inv_deriv(lam, x)
+    return (1.0 + gamma**2 / (4.0 * s**2)) * ds
 
 
 # ``yj.power(y, lambda)`` — Yeo & Johnson (2000) power transform.
@@ -1300,24 +1307,24 @@ def make_tran(
             bias_deriv=None,
         )
     if key == "bcnpower":
-        # R ``make.tran("bcnPower", lambda, gamma)`` — "Box-Cox with
-        # Negatives" (Hawkins & Weisberg 2017). Equivalent to a
-        # Box-Cox on the shifted response ``y + gamma``; the
-        # derivative is identical to Box-Cox's (gamma drops out
-        # under differentiation), so we reuse the Box-Cox
-        # derivative helper directly via partial.
+        # R ``make.tran("bcnPower", lambda, gamma)`` / ``car::bcnPower``
+        # — "Box-Cox with Negatives" (Hawkins & Weisberg 2017). Applies
+        # a Box-Cox to the smoothed response
+        # ``s = 0.5(y + sqrt(y^2 + gamma^2))``; the gamma smoothing term
+        # carries into the inverse and its derivative (see
+        # :func:`_bcn_power_inv` / :func:`_bcn_power_inv_deriv`).
         if lambda_ is None or gamma is None:
             raise ValueError(
                 "make_tran('bcnPower') requires BOTH a power "
-                "``lambda_=`` and a shift ``gamma=``. Common "
-                "workflow: choose gamma so all observations of "
-                "y + gamma are strictly positive, then estimate "
-                "lambda via profile likelihood."
+                "``lambda_=`` and a smoothing ``gamma=`` (> 0). Common "
+                "workflow: choose gamma so the smoothed response is "
+                "well-behaved near zero, then estimate lambda via "
+                "profile likelihood."
             )
         lam = _require_finite_param("lambda_", lambda_)
         gam = _require_finite_param("gamma", gamma)
         inv_fn = functools.partial(_bcn_power_inv, lam, gam)
-        d_fn = functools.partial(_boxcox_inv_deriv, lam)
+        d_fn = functools.partial(_bcn_power_inv_deriv, lam, gam)
         return Transform(
             name=f"bcnPower(lambda={lam}, gamma={gam})",
             inverse=inv_fn,

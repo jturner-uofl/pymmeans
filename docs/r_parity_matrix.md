@@ -145,7 +145,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `scale` | ✅ Full | Linear contrast back-transform too |
 | `log+1`, `log+.5`, `sqrt+.5`, `+.5` | ✅ Full | |
 | `identity` | ✅ Full | Explicit no-op |
-| `power`, `sympower`, `atanh`, `asinh.sqrt`, `bcnPower`, `yj.power` | ❌ Missing | v0.2 |
+| `power`, `sympower`, `atanh`, `asin_sqrt`, `bcnPower`, `yj.power` | ✅ Full | Parametric power transforms via `make_tran(...)`. `power` matches R `make.tran('power')` exactly; `bcnPower` matches `car::bcnPowerInverse` (Hawkins–Weisberg); `yj.power` round-trips through `car::yjPower`; `atanh`/`asin_sqrt` are in the auto-detect registry. `sympower` back-transformed estimates match R exactly, but its derivative is the mathematically-correct `(1/λ)|z|^{1/λ−1}` — R `emmeans`' `sympower` `mu.eta` drops the `1/λ` factor (an emmeans bug), which pymmeans intentionally does not replicate. Validated in jss\_audit §XXVIII. |
 
 ## Model classes
 
@@ -235,12 +235,12 @@ extension hooks that v0.1 routes through the adapter protocol.
 
 | Tier | Count |
 |---|---|
-| ✅ Full | 84 |
+| ✅ Full | 85 |
 | 🟡 Partial | 4 |
-| ❌ Missing | 12 |
+| ❌ Missing | 11 |
 
-**84 / 100 strict parity on the public surface (88 / 100 if Partial
-counts).** The remaining 12 ❌ items are distributed as:
+**85 / 100 strict parity on the public surface (89 / 100 if Partial
+counts).** The remaining 11 ❌ items are distributed as:
 
 - **No-Python-equivalent model classes** (4): `aovlist`, `survreg`,
   `mvmodel`, `glmmTMB` / `MCMCglmm`
