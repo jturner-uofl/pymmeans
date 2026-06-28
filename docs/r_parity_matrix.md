@@ -71,7 +71,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `pwpm(emm, type=)` | ✅ Full | Matrix display; `type='response'` produces a ratio matrix for log-family models |
 | `emmip(model, formula, PIs=, dodge=, CIs=, plotit=)` | ✅ Full | `PIs=True`, `dodge=`, `plotit=False` returning R-style DataFrame, `CIs=` as R alias for `show_ci=`. `abbr.len` deferred to v0.2 |
 | `plot(emm)` | 🟡 Partial | Basic forest plot; `comparisons=`, `sep=` missing |
-| `ref_grid(model)` | 🟡 Partial | `nesting=` and `nuisance=` are supported (see rows below). `cov.reduce=` callables not yet routed through the public `ref_grid` constructor; the `emmeans()` entry point covers the common cases. |
+| `ref_grid(model)` | ✅ Full | `nesting=` / `nuisance=` supported; `cov_reduce=` accepts a bare callable (applied to all numeric covariates, R-style `cov.reduce = median`) or a per-column dict, on both `ref_grid()` and `emmeans()`. Validated in jss_audit §XXX. |
 | `regrid(emm, transform=)` | ✅ Full | R-style wrapper; aliases `"response"` / `"mu"` / `"unlink"` route to `regrid_response`; `"pass"` / `"none"` / `None` are no-ops |
 | `eff_size(emm, sigma=, edf=, method=)` | ✅ Full | Cohen's d + Hedges' g; emits R-style `effect_size` / `effect_size_SE` / `effect_size_lower_cl` / `effect_size_upper_cl` columns |
 | `make.tran(type, ...)` | ✅ Full | R aliases: `asin.sqrt`, `log+1`, `sqrt+.5`, `identity` |
@@ -130,7 +130,7 @@ Features `pymmeans` ships that R `emmeans` does not have:
 | `hochberg` | ✅ Full |
 | `hommel` | ✅ Full |
 | `scheffe` | ✅ Full (`df=inf` → χ² limit) |
-| `cross.adjust` | ❌ Missing (v0.2; summary-layer feature) |
+| `cross.adjust` | ✅ Full | `summary(..., cross_adjust=)` applies the method to each contrast's by-group family of size G (bonferroni ×G, Šidák 1−(1−p)^G); matches R to ~1e-11 (jss_audit §XXX). |
 | `side=` / `null=` / `delta=` | ✅ Full |
 
 ## Transforms
@@ -235,12 +235,12 @@ extension hooks that v0.1 routes through the adapter protocol.
 
 | Tier | Count |
 |---|---|
-| ✅ Full | 85 |
-| 🟡 Partial | 4 |
-| ❌ Missing | 11 |
+| ✅ Full | 87 |
+| 🟡 Partial | 3 |
+| ❌ Missing | 10 |
 
-**85 / 100 strict parity on the public surface (89 / 100 if Partial
-counts).** The remaining 11 ❌ items are distributed as:
+**87 / 100 strict parity on the public surface (90 / 100 if Partial
+counts).** The remaining 10 ❌ items are distributed as:
 
 - **No-Python-equivalent model classes** (4): `aovlist`, `survreg`,
   `mvmodel`, `glmmTMB` / `MCMCglmm`

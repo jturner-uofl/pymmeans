@@ -115,10 +115,16 @@ def _resolve_cov_reduce(
     """
     if cov_reduce is None:
         return {}
+    # R-style bare callable: ``cov_reduce=np.median`` (or any function of a
+    # Series) is applied to *every* numeric covariate, matching R
+    # ``ref_grid(..., cov.reduce = median)``. Broadcast it to the per-column
+    # dict form and fall through to the validated callable path below.
+    if callable(cov_reduce):
+        cov_reduce = {col: cov_reduce for col in info.numeric_means}
     if not isinstance(cov_reduce, dict):
         raise TypeError(
-            f"cov_reduce must be a dict[name -> callable | scalar]; "
-            f"got {type(cov_reduce).__name__}."
+            f"cov_reduce must be a callable, or a dict[name -> callable | "
+            f"scalar]; got {type(cov_reduce).__name__}."
         )
 
     known = set(info.numeric_means)

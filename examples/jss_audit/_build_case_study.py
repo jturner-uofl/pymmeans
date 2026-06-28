@@ -6232,7 +6232,77 @@ check("XXIX.2", "multi-degree linear row equals the single-degree emtrends",
 
 # ================================================================== §XXX
 md(r"""
-# Section XXX — Validation scorecard
+# Section XXX — `cov_reduce` callables and `cross_adjust`
+
+Two further R `emmeans` parity closers: a bare-callable `cov_reduce`
+(R `cov.reduce = median` — summarise every numeric covariate with a
+function), and `cross_adjust` (a second multiplicity adjustment across the
+`by` groups, on top of the within-group adjustment).
+
+* **§XXX.1** — `cov_reduce=np.median` evaluates the reference grid at each
+  covariate's median; the EMM shifts by exactly `coef × (median − mean)`.
+* **§XXX.2** — `summary(..., cross_adjust=)` matches R's rule: `bonferroni`
+  multiplies each within-group-adjusted p-value by the number of by-groups
+  `G`, and `sidak` gives `1 − (1 − p)^G`.
+""")
+
+code(r"""
+# §XXX.1 - bare-callable cov_reduce (R cov.reduce = median).
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, pairs, summary
+
+_rng_c = np.random.default_rng(20260628)
+_nc = 200
+_dfc = pd.DataFrame({
+    "g": pd.Categorical(_rng_c.choice(["A", "B"], _nc)),
+    "z": _rng_c.standard_normal(_nc) * 3 + 5,
+})
+_dfc["y"] = (_dfc["g"].map({"A": 0.0, "B": 1.0}).astype(float)
+             + 0.5 * _dfc["z"] + _rng_c.standard_normal(_nc))
+_fitc = smf.ols("y ~ g + z", _dfc).fit()
+_at_mean = float(emmeans(_fitc, "g").frame.set_index("g").loc["A", "emmean"])
+_at_med = float(emmeans(_fitc, "g", cov_reduce=np.median).frame.set_index("g").loc["A", "emmean"])
+_expected = float(_fitc.params["z"]) * (_dfc["z"].median() - _dfc["z"].mean())
+print(f"  cov_reduce=median shift = {_at_med - _at_mean:.8f}  (coef*(median-mean) = {_expected:.8f})")
+check("XXX.1", "bare-callable cov_reduce shifts EMM by coef*(median-mean)",
+      abs((_at_med - _at_mean) - _expected), 1e-9, "structural")
+""")
+
+code(r"""
+# §XXX.2 - cross_adjust matches R's bonferroni / sidak rule across by-groups.
+_rng_x = np.random.default_rng(3)
+_nx = 120
+_dfx = pd.DataFrame({
+    "t": pd.Categorical(_rng_x.choice(["a", "b", "c"], _nx)),
+    "g": pd.Categorical(_rng_x.choice(["G1", "G2"], _nx)),
+})
+_dfx["y"] = (_dfx["t"].map({"a": 0.6, "b": 1.2, "c": 1.8}).astype(float)
+             + (_dfx["g"] == "G2") * 0.4 + _rng_x.standard_normal(_nx))
+_fitx = smf.ols("y ~ t * g", _dfx).fit()
+_ct = pairs(emmeans(_fitx, "t", by="g"))
+_within = summary(_ct, adjust="tukey")
+_G = _within["g"].nunique()
+_key = ["contrast", "g"]
+_w = _within.set_index(_key)["p_value"]
+
+_bonf = summary(_ct, adjust="tukey", cross_adjust="bonferroni").set_index(_key)["p_value"]
+_exp_bonf = np.minimum(1.0, _w * _G)
+check("XXX.2", "cross_adjust='bonferroni' equals min(1, within_p * G)",
+      float(np.max(np.abs(_bonf.to_numpy() - _exp_bonf.loc[_bonf.index].to_numpy()))),
+      1e-9, "R cross-validation")
+
+_sid = summary(_ct, adjust="tukey", cross_adjust="sidak").set_index(_key)["p_value"]
+_exp_sid = 1.0 - (1.0 - _w) ** _G
+check("XXX.2", "cross_adjust='sidak' equals 1 - (1 - within_p)^G",
+      float(np.max(np.abs(_sid.to_numpy() - _exp_sid.loc[_sid.index].to_numpy()))),
+      1e-9, "R cross-validation")
+""")
+
+# ================================================================== §XXXI
+md(r"""
+# Section XXXI — Validation scorecard
 """)
 
 code(r"""

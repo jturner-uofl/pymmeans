@@ -166,7 +166,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 __all__ = [
     "CONTRAST_METHODS",

@@ -5,6 +5,31 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-06-28
+
+### Added / R-emmeans parity
+
+- **`cov_reduce=` now accepts a bare callable** on `emmeans()` and
+  `ref_grid()`, applied to every numeric covariate (R-style
+  `ref_grid(..., cov.reduce = median)`) — previously only a per-column
+  `{name: callable}` dict was accepted. The EMM shifts by exactly
+  `coef × (reduce(x) − mean(x))`. (Moves `ref_grid` to full parity.)
+- **`cross_adjust=`** (second-stage multiplicity adjustment across `by`
+  groups, in `summary()`) is validated against R `emmeans`'
+  `cross.adjust`: `bonferroni` multiplies each within-group-adjusted
+  p-value by the number of by-groups `G`, and `sidak` gives `1 − (1 − p)^G`
+  — matching R to `~1e-11`. (Already implemented; the R-parity matrix had
+  it wrongly listed as missing.)
+
+### Documentation
+
+- R-parity matrix corrected: `cross.adjust` and `ref_grid` `cov.reduce`
+  moved to full parity (both had stale "missing"/"partial" entries). Strict
+  parity is now **87/100 (90/100 with partial)**, with the README and paper
+  reconciled. New validation-notebook Section XXX; the executed notebook
+  records 329 contracts (175 cross-validation + 112 structural + 42
+  Monte-Carlo), zero failures.
+
 ## [0.14.0] — 2026-06-28
 
 ### Added
