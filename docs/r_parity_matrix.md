@@ -50,8 +50,15 @@ Features `pymmeans` ships that R `emmeans` does not have:
   estimate; the author declined to warn, rvlenth/emmeans #523), `pymmeans`
   refuses a numeric focal covariate without `at=` and **names the most
   likely fix** (`C(x)` / `pd.Categorical` when the covariate looks
-  miscoded; `at=` / `emtrends` when it is genuinely continuous). First of
-  the `docs/wishlist.md` "self-describing result" sweeteners.
+  miscoded; `at=` / `emtrends` when it is genuinely continuous).
+- **`EMMResult.describe()`** — a one-call, plain-English account of what an
+  EMM *is*: the active scale (link vs response), which factors were averaged
+  over and with what weights, which covariates are held fixed and at what
+  value, a flag when an averaged-over factor **interacts** with the target
+  (suggesting `by=`), **named** non-estimable cells, and comparison
+  guidance. Neither R `emmeans` nor `marginaleffects` ships an equivalent.
+  These two are the `docs/wishlist.md` "self-describing result" sweeteners,
+  drawn from a sourced audit of emmeans community pain points.
 
 ## Legend
 

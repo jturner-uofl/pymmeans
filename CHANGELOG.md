@@ -5,6 +5,28 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] — 2026-06-28
+
+### Added — self-describing results (wish-list sweetener cluster)
+
+- **`EMMResult.describe()`** — a one-call, plain-English account of what an
+  EMM actually is, surfaced on demand without changing the default frame
+  output. It reports:
+  - the **active scale** (link vs response; a logit/GLM link scale is
+    explicitly labelled "NOT the response scale");
+  - which factors were **averaged over** and with what **weights**;
+  - which **covariates are held fixed** and at what value;
+  - a **flag when an averaged-over factor interacts with the target**, with a
+    `by=` suggestion (the EMM can otherwise be misleading);
+  - **named non-estimable cells** ("g=C, blk=y") instead of a bare `NonEst`;
+  - **comparison guidance** (use `pairs()`/`contrast()`; don't read
+    significance from overlapping CIs).
+
+  These target the largest cluster of R `emmeans` user confusions catalogued
+  in `docs/wishlist.md` (FAQ entries #5/#7/#12/#14/#16/#18/#19). Neither R
+  `emmeans` nor `marginaleffects` ships an equivalent. `docs/wishlist.md`
+  updated to mark sweeteners #1/#3/#5/#6 shipped.
+
 ## [0.19.0] — 2026-06-28
 
 ### Changed — mistake-catching guidance (wish-list sweetener)

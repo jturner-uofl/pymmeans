@@ -34,14 +34,14 @@ data; bad model in → bad results out"* ([FAQ](https://rvlenth.github.io/emmean
 [#523 wontfix](https://github.com/rvlenth/emmeans/issues/523)). That refusal is
 the opening — a durable differentiator, not catch-up.
 
-| # | Sweetener | Evidence | Effort | Moat |
-|---|---|---|---|---|
-| 1 | **Annotate the result**: print the active *scale* ("ratios, response scale"), the *adjustment scope* ("Tukey, within each of 4 by-groups"), and *held-at-mean covariates* ("age=43.2") | FAQ #7/#14/#18/#19/#20 — largest pain cluster | Low | emmeans won't clutter output; kills 3 top-5 confusions |
-| 2 | **Footgun warnings**: warn when a 3+level factor is coded numeric (FAQ #3/#10/#11); warn when `log(x)`/`poly(x)` makes the grid use `mean(x)` not `mean(log x)` | [#523 wontfix](https://github.com/rvlenth/emmeans/issues/523), FAQ | Low–Med | **Explicitly declined by emmeans** |
-| 3 | **Name which cell is non-estimable and why** ("no data for A=2, B=3") instead of bare `NonEst`/NaN | FAQ #12, [#71](https://github.com/rvlenth/emmeans/issues/71) | Low | Pure diagnostics |
-| 4 | **Estimand made explicit** + a "which average?" helper (equal / proportional / counterfactual), labeled in output | Heiss "Marginalia"; [marginaleffects JSS](https://arelbundock.com/research/arel-bundock_greifer_heiss_2024_how_to_interpret_statistical_models_using_marginaleffects_in_r_and_python.pdf); ggeffects | Med | The deepest critique (experimental-vs-observational) |
-| 5 | **Inline "did you mean `by=`?"** when the averaging-over-interactions warning fires | FAQ #5/#16 | Low | Turns the scariest warning into a guided fix |
-| 6 | **Comparison-appropriate uncertainty by default** (steer from overlapping-CI fallacy toward `pwpp`/arrows) | [comparisons vignette](https://rvlenth.github.io/emmeans/articles/comparisons.html) | Low | Default-steering emmeans only nags about |
+| # | Sweetener | Evidence | Effort | Moat | Status |
+|---|---|---|---|---|---|
+| 1 | **Annotate the result**: the active *scale*, *held-at-mean covariates* ("age=43.2"), and what was averaged over (with weights) | FAQ #7/#14/#18/#19/#20 — largest pain cluster | Low | emmeans won't clutter output | ✅ `EMMResult.describe()` (v0.20) |
+| 2 | **Footgun warnings**: warn when a 3+level factor is coded numeric (FAQ #3/#10/#11); warn when `log(x)`/`poly(x)` makes the grid use `mean(x)` not `mean(log x)` | [#523 wontfix](https://github.com/rvlenth/emmeans/issues/523), FAQ | Low–Med | **Explicitly declined by emmeans** | ✅ numeric-target error names the `C(x)` fix (v0.19); the `log(x)` grid case still open |
+| 3 | **Name which cell is non-estimable and why** ("no data for A=2, B=3") instead of bare `NonEst`/NaN | FAQ #12, [#71](https://github.com/rvlenth/emmeans/issues/71) | Low | Pure diagnostics | ✅ `describe()` names them (v0.20) |
+| 4 | **Estimand made explicit** + a "which average?" helper (equal / proportional / counterfactual), labeled in output | Heiss "Marginalia"; [marginaleffects JSS](https://arelbundock.com/research/arel-bundock_greifer_heiss_2024_how_to_interpret_statistical_models_using_marginaleffects_in_r_and_python.pdf); ggeffects | Med | The deepest critique (experimental-vs-observational) | open (design conversation) |
+| 5 | **Inline "did you mean `by=`?"** when averaging over an interacting factor | FAQ #5/#16 | Low | Turns the scariest warning into a guided fix | ✅ `describe()` flags it (v0.20) |
+| 6 | **Comparison-appropriate uncertainty by default** (steer from overlapping-CI fallacy toward `pwpp`/arrows) | [comparisons vignette](https://rvlenth.github.io/emmeans/articles/comparisons.html) | Low | Default-steering emmeans only nags about | ✅ `describe()` gives the guidance (v0.20); `pwpp`/`cld` already shipped |
 
 ### Lower-priority / higher-effort
 

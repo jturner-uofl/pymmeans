@@ -194,6 +194,128 @@ class EMMResult:
             header += f" (by {', '.join(self.by)})"
         return f"{header}\n{self.frame!r}"
 
+    def describe(self) -> str:
+        """Return a plain-English description of exactly what this EMM *is*.
+
+        Reports the active scale, which factors were averaged over (and with
+        what weights), which covariates are held fixed and at what value, any
+        non-estimable cells, and how the estimates should (and should not) be
+        compared. ``print(em.describe())``.
+
+        This targets the most-repeated R ``emmeans`` user confusions catalogued
+        in ``docs/wishlist.md`` — the silent "averaged over / held at the mean"
+        behaviour, which scale you're on, non-estimable `NonEst` cells, and the
+        "don't read significance from overlapping CIs" trap — surfaced on
+        demand rather than left for the user to infer.
+        """
+        info = self.model_info
+
+        def _canon(n: str) -> str:
+            return info.aliases.get(n, n)
+
+        target_canon = {_canon(t) for t in self.target}
+        focal = target_canon | {_canon(b) for b in self.by}
+
+        lines: list[str] = []
+        tgt = ", ".join(self.target) or "(none)"
+        head = f"Estimated marginal means of {tgt}"
+        if self.by:
+            head += f", by {', '.join(self.by)}"
+        lines.append(head)
+
+        # Active scale.
+        if self.type == "response":
+            scale = "response scale (back-transformed from the model link)"
+        elif info.family is not None:
+            link = getattr(info.family, "link", None)
+            lname = type(link).__name__.lower() if link is not None else "link"
+            scale = (
+                f"linear-predictor (link) scale [{lname}] — NOT the response "
+                "scale; pass type='response' to back-transform"
+            )
+        else:
+            scale = "response scale"
+        lines.append(f"  Scale: {scale}")
+
+        # Factors averaged over + weighting scheme.
+        averaged = [f for f in (info.factors or {}) if _canon(f) not in focal]
+        if averaged:
+            lines.append(
+                f"  Averaged over: {', '.join(sorted(averaged))} "
+                f"(weights: {self.weights or 'equal'})"
+            )
+
+        # Covariates held fixed (and at what value).
+        at = self.at or {}
+        held: list[str] = []
+        for cov, mean in (info.numeric_means or {}).items():
+            if _canon(cov) in focal:
+                continue
+            val = at.get(cov, mean)
+            if isinstance(val, (list, tuple, np.ndarray)):
+                continue  # swept via at=, not held
+            try:
+                held.append(f"{cov} = {float(val):.4g}")
+            except (TypeError, ValueError):
+                continue
+        if held:
+            lines.append(f"  Covariates held fixed: {', '.join(held)}")
+
+        # Inference annotations.
+        df_label = {
+            "default": "model default",
+            "satterthwaite": "Satterthwaite",
+            "kenward_roger": "Kenward-Roger",
+        }.get(self.df_method, self.df_method)
+        infer = f"  Confidence level: {round(self.level * 100)}%  (df: {df_label})"
+        if self.inference_kind == "posterior":
+            infer += "; posterior credible intervals"
+        lines.append(infer)
+        if self.adjust and str(self.adjust).lower() not in ("none", "tukey"):
+            lines.append(f"  p-value adjustment: {self.adjust}")
+
+        # Interaction caveat: an averaged-over factor that interacts with a
+        # target factor makes the EMM an average across that interaction —
+        # often misleading. Suggest holding it fixed via by=.
+        averaged_canon = {_canon(a) for a in averaged}
+        interacting: set[str] = set()
+        try:
+            for term in info.design_info.terms:
+                fac = {_canon(f.name()) for f in term.factors}
+                if len(fac) >= 2 and (fac & target_canon):
+                    interacting |= (fac - focal) & averaged_canon
+        except Exception:
+            pass
+        if interacting:
+            names = sorted(interacting)
+            lines.append(
+                f"  Note: {', '.join(names)} interacts with the target in the "
+                f"model — averaging over it can be misleading; consider "
+                f"by={names if len(names) > 1 else names[0]!r} to hold it fixed."
+            )
+
+        # Non-estimable cells, named.
+        if "emmean" in self.frame.columns:
+            ne = self.frame[self.frame["emmean"].isna()]
+            if len(ne):
+                keycols = [c for c in (self.target + self.by) if c in ne.columns]
+                cells = [
+                    ", ".join(f"{c}={r[c]}" for c in keycols)
+                    for _, r in ne.head(6).iterrows()
+                ]
+                more = "" if len(ne) <= 6 else f" (+{len(ne) - 6} more)"
+                lines.append(
+                    "  Non-estimable cells (no data / rank-deficient): "
+                    f"{'; '.join(cells)}{more}"
+                )
+
+        # Comparison guidance.
+        lines.append(
+            "  To compare these, use pairs()/contrast() — do not read "
+            "significance from overlapping confidence intervals."
+        )
+        return "\n".join(lines)
+
     @property
     def n_rows(self) -> int:
         """Number of EMM rows in the summary frame."""

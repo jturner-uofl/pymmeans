@@ -6592,7 +6592,78 @@ check("XXXV.1", "numeric-target error names the factor fix only when the covaria
 
 # ================================================================== §XXXVI
 md(r"""
-# Section XXXVI — Validation scorecard
+# Section XXXVI — Self-describing results (`EMMResult.describe()`)
+
+The largest cluster of R `emmeans` user confusions (see `docs/wishlist.md`)
+is *implicit* behaviour: which scale am I on, what got averaged over (with
+what weights), which covariates are pinned, why is a cell `NonEst`, and the
+trap of comparing overlapping CIs. `EMMResult.describe()` surfaces all of it
+in one call — without changing the default frame output.
+
+* **§XXXVI.1** — for an interaction model `y ~ g*block + age`, the EMM of `g`
+  describes its scale, names `block` as averaged-over, reports `age` held at
+  its mean, **flags that `block` interacts with the target** (suggesting
+  `by='block'`), and gives comparison guidance.
+* **§XXXVI.2** — on a logit GLM the link scale is labelled "NOT the response
+  scale"; a non-estimable cell from an empty design cell is **named**.
+""")
+
+code(r"""
+# §XXXVI.1 - describe() surfaces scale / averaging / held covariate / interaction.
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from pymmeans import emmeans
+
+_rng_d = np.random.default_rng(0)
+_nd = 400
+_dfd = pd.DataFrame({
+    "g": pd.Categorical(_rng_d.choice(["A", "B"], _nd)),
+    "block": pd.Categorical(_rng_d.choice(["x", "y", "z"], _nd)),
+    "age": _rng_d.normal(40, 8, _nd),
+})
+_dfd["y"] = (_dfd["g"].map({"A": 0, "B": 1}).astype(float)
+             + 0.3 * (_dfd["block"] == "y") + 0.05 * _dfd["age"]
+             + _rng_d.standard_normal(_nd))
+_desc = emmeans(smf.ols("y ~ g*block + age", _dfd).fit(), "g").describe()
+print(_desc)
+_ok1 = all(s in _desc for s in [
+    "Scale: response scale", "Averaged over: block", "weights: equal",
+    "Covariates held fixed: age =", "block interacts with the target",
+    "by='block'", "use pairs()/contrast()",
+])
+check("XXXVI.1", "describe() reports scale, averaging, held covariate, interaction, guidance",
+      0.0 if _ok1 else 1.0, 0.0, "structural")
+""")
+
+code(r"""
+# §XXXVI.2 - link-scale labelling + named non-estimable cell.
+_dfg = pd.DataFrame({"g": pd.Categorical(_rng_d.choice(["A", "B"], 300))})
+_dfg["yb"] = (_rng_d.random(300) < 0.5).astype(int)
+_fitg = smf.glm("yb ~ g", _dfg, family=sm.families.Binomial()).fit()
+_link = emmeans(_fitg, "g").describe()
+_ok_link = "link) scale [logit]" in _link and "NOT the response" in _link
+
+_rng_e = np.random.default_rng(1)
+_dfe = pd.DataFrame({
+    "g": pd.Categorical(_rng_e.choice(["A", "B", "C"], 300)),
+    "blk": pd.Categorical(_rng_e.choice(["x", "y"], 300)),
+})
+_dfe = _dfe[~((_dfe["g"] == "C") & (_dfe["blk"] == "y"))].copy()  # empty cell
+_dfe["y"] = _dfe["g"].cat.codes * 0.5 + (_dfe["blk"] == "y") * 0.3 + _rng_e.standard_normal(len(_dfe))
+import warnings as _wn
+with _wn.catch_warnings():
+    _wn.simplefilter("ignore")
+    _ne = emmeans(smf.ols("y ~ g*blk", _dfe).fit(), ["g", "blk"]).describe()
+_ok_ne = "Non-estimable cells" in _ne and "g=C, blk=y" in _ne
+check("XXXVI.2", "describe() labels link scale and names the non-estimable cell",
+      0.0 if (_ok_link and _ok_ne) else 1.0, 0.0, "structural")
+""")
+
+# ================================================================== §XXXVII
+md(r"""
+# Section XXXVII — Validation scorecard
 """)
 
 code(r"""
