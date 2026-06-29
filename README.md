@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/jturner-uofl/pymmeans?label=release)](https://github.com/jturner-uofl/pymmeans/releases)
 
-Status: **Beta** · v0.18.0 · API stable, numerical surface frozen.
+Status: **Beta** · v0.19.0 · API stable, numerical surface frozen.
 
 Estimated marginal means (EMMs) for Python. A native implementation of R's
 [emmeans](https://cran.r-project.org/package=emmeans) and
@@ -25,7 +25,7 @@ with no R toolchain required.
 
 ## Status
 
-Beta. Version 0.18.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
+Beta. Version 0.19.0. API stable across the OLS, GLM, MixedLM, GEE, Cox
 proportional-hazards, parametric AFT, ordinal, multinomial, and
 survey-weighted model classes. For MixedLM the Kenward–Roger and
 Satterthwaite degrees-of-freedom machinery covers the `cov_re`,
@@ -35,7 +35,7 @@ items counted; see the [R-parity matrix](docs/r_parity_matrix.md),
 the audited source of truth). The numerical surface is frozen; minor
 API polish is still possible until version 1.0.
 
-The public API surface is exercised by 586 unit tests.
+The public API surface is exercised by 591 unit tests.
 The full suite reaches 87% line coverage and totals 1,192 passing
 tests, including the internal audit-regression file.
 
@@ -43,7 +43,7 @@ tests, including the internal audit-regression file.
 |-----------------------------------------|--------------------------------|
 | Unit tests                              | 1,192 passing (586 public-surface) |
 | Line coverage                           | 87 %                           |
-| Validation contracts                    | 340 (176 R cross-validation + 119 structural + 45 Monte-Carlo) |
+| Validation contracts                    | 341 (176 R cross-validation + 120 structural + 45 Monte-Carlo) |
 | Validation contract failures            | 0                              |
 | Wall-clock vs R `emmeans` (common paths)| 1.6–4.1 times faster on 4 of 6 representative workloads |
 | Wall-clock vs R `emmeans` (slow paths)  | 13–34 times slower on 2 of 6 (both diagnosed; see Section 5 of the manuscript) |
@@ -226,10 +226,10 @@ the full enumeration is in the validation notebook and the manuscript.
 Three independent layers of evidence support the numerical claims.
 
 - **Automated test suite.** 1,192 unit tests at 87 % line coverage
-  (586 on the public API surface). Execute with `make test` or `pytest -q`.
-- **Narrative validation notebook.** 340 enumerated contracts spanning
+  (591 on the public API surface). Execute with `make test` or `pytest -q`.
+- **Narrative validation notebook.** 341 enumerated contracts spanning
   direct cross-validation against R reference values (176), structural
-  and self-consistency identities (119), and Monte-Carlo coverage and
+  and self-consistency identities (120), and Monte-Carlo coverage and
   calibration checks (42). Zero failures. The notebook is at
   [`examples/jss_audit/jss_case_study.ipynb`](https://nbviewer.org/github/jturner-uofl/pymmeans/blob/main/examples/jss_audit/jss_case_study.ipynb)
   and can be re-executed with `make notebook`.

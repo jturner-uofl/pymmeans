@@ -6539,7 +6539,60 @@ check("XXXIV.2", "vcov= callable form equals the explicit-matrix form",
 
 # ================================================================== §XXXV
 md(r"""
-# Section XXXV — Validation scorecard
+# Section XXXV — Mistake-catching guidance (wish-list sweetener)
+
+A community audit of R `emmeans` (see `docs/wishlist.md`) found that its
+single most-repeated user confusion is coding a 3+-level factor as a number:
+R then summarises a nonsense linear fit and returns one estimate, and the
+author declined to warn ("emmeans summarises the model, not the data";
+rvlenth/emmeans #523, wontfix). `pymmeans` already *refuses* a numeric focal
+covariate without `at=`; this sweetener makes the refusal **name the most
+likely fix**.
+
+* **§XXXV.1** — a numeric focal variable with few distinct values (a likely
+  miscoded factor) produces an error naming the `C(x)` / `pd.Categorical`
+  fix; a genuine continuous covariate keeps the `at=` / `emtrends` guidance
+  without the spurious factor hint.
+""")
+
+code(r"""
+# §XXXV.1 - the numeric-target error adapts to the covariate's cardinality.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans
+
+_rng_m = np.random.default_rng(0)
+_nm = 200
+# miscoded factor: group coded 1/2/3
+_dfm = pd.DataFrame({"grp": _rng_m.choice([1, 2, 3], _nm)})
+_dfm["y"] = _dfm["grp"] * 0.7 + _rng_m.standard_normal(_nm)
+_fitm = smf.ols("y ~ grp", _dfm).fit()
+try:
+    emmeans(_fitm, "grp")
+    _miscoded_msg = ""
+except ValueError as e:
+    _miscoded_msg = str(e)
+# genuine continuous covariate
+_dfx = pd.DataFrame({"x": _rng_m.standard_normal(_nm)})
+_dfx["y"] = 2 * _dfx["x"] + _rng_m.standard_normal(_nm)
+try:
+    emmeans(smf.ols("y ~ x", _dfx).fit(), "x")
+    _cont_msg = ""
+except ValueError as e:
+    _cont_msg = str(e)
+_ok = (
+    "C(grp)" in _miscoded_msg and "distinct values" in _miscoded_msg
+    and "emtrends" in _cont_msg and "C(x)" not in _cont_msg
+)
+print(f"  miscoded -> names C(grp): {'C(grp)' in _miscoded_msg};  continuous -> generic: {'C(x)' not in _cont_msg}")
+check("XXXV.1", "numeric-target error names the factor fix only when the covariate looks miscoded",
+      0.0 if _ok else 1.0, 0.0, "structural")
+""")
+
+# ================================================================== §XXXVI
+md(r"""
+# Section XXXVI — Validation scorecard
 """)
 
 code(r"""

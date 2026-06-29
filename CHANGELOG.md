@@ -5,6 +5,20 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-06-28
+
+### Changed — mistake-catching guidance (wish-list sweetener)
+
+- The error raised when a **numeric focal covariate** is used as `specs`/`by`
+  without `at=` now **names the most likely fix**. When the covariate has few
+  distinct values — the signature of a 3+-level factor coded as a number,
+  which is R `emmeans`' single most-repeated user confusion (it silently
+  returns one estimate; the author declined to warn, rvlenth/emmeans #523) —
+  the message leads with `C(x)` / `pd.Categorical`. A genuinely continuous
+  covariate keeps the `at=` / `emtrends` guidance, with no spurious factor
+  hint. First of the `docs/wishlist.md` "self-describing result" sweeteners
+  (a sourced audit of emmeans community pain points, added this release).
+
 ## [0.18.0] — 2026-06-28
 
 ### Added / R-emmeans parity

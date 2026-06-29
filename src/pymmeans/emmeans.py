@@ -1079,6 +1079,29 @@ def _marginalize_cells(
 
 _SENTINEL = object()
 
+# A numeric focal covariate with at most this many distinct values in the
+# training data is flagged as a likely miscoded factor. Continuous covariates
+# (age, income, ...) have many more distinct values and never trip this.
+_CATEGORICAL_NUMERIC_MAX_LEVELS = 12
+
+
+def _miscoded_factor_distinct_count(info: ModelInfo, name: str) -> int | None:
+    """If ``name`` is a numeric covariate whose training-data column has a
+    small number of distinct values — the signature of a 3+-level factor
+    entered as a number (R FAQ "all I get is one estimate", #3/#10/#11) —
+    return that distinct count; otherwise ``None``.
+
+    Used to add a "did you mean a factor?" hint to the numeric-target error.
+    No-op (``None``) when the training data is unavailable (e.g. post-pickle)
+    or the covariate is genuinely continuous (many distinct values)."""
+    data = getattr(info, "data", None)
+    if data is None or not hasattr(data, "columns") or name not in data.columns:
+        return None
+    n_distinct = int(pd.Series(data[name]).nunique(dropna=True))
+    if 2 <= n_distinct <= _CATEGORICAL_NUMERIC_MAX_LEVELS:
+        return n_distinct
+    return None
+
 
 def emmeans(
     model: Any,
@@ -1928,15 +1951,33 @@ def emmeans(
             continue
         if name in info.numeric_means:
             if name not in at_keys_all:
-                raise ValueError(
-                    f"'{name}' is a numeric covariate; using it as a "
-                    "target / by requires `at={...}` with explicit "
-                    f"values (e.g. `at={{'{name}': [-1, 0, 1]}}`). "
-                    f"Without at=, a numeric target collapses to a "
-                    f"single row at the training-data mean. For the "
-                    "slope of the response w.r.t. a covariate, use "
-                    f"`emtrends(info, ..., var='{name}')` instead."
-                )
+                # If the covariate looks like a miscoded factor (only a few
+                # distinct values), the most likely fix is to make it a
+                # factor — lead with that hint. R emmeans gives a silent
+                # one-row answer here and will not warn (#523 wontfix); we
+                # name the most probable cause instead.
+                n_distinct = _miscoded_factor_distinct_count(info, name)
+                if n_distinct is not None:
+                    hint = (
+                        f"'{name}' is numeric with only {n_distinct} distinct "
+                        f"values — if it is really categorical (a factor coded "
+                        f"as a number), refit with C({name}) or pd.Categorical "
+                        f"and you will get one EMM per level. If it is a "
+                        f"genuine covariate, pass `at={{'{name}': [...]}}` to "
+                        f"choose values, or use "
+                        f"`emtrends(info, ..., var='{name}')` for its slope."
+                    )
+                else:
+                    hint = (
+                        f"'{name}' is a numeric covariate; using it as a "
+                        "target / by requires `at={...}` with explicit "
+                        f"values (e.g. `at={{'{name}': [-1, 0, 1]}}`). "
+                        f"Without at=, a numeric target collapses to a "
+                        f"single row at the training-data mean. For the "
+                        "slope of the response w.r.t. a covariate, use "
+                        f"`emtrends(info, ..., var='{name}')` instead."
+                    )
+                raise ValueError(hint)
             continue
         # when the user passes a canonical
         # multi-col-basis name as target (e.g. ``"bs(x, df=3)"``),

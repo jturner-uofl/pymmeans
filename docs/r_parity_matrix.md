@@ -45,6 +45,13 @@ Features `pymmeans` ships that R `emmeans` does not have:
   (including `concurrent.futures.ThreadPoolExecutor` workers) sees
   its own option state, and does not inherit the submitter's
   context.
+- **Mistake-catching guidance** — where R `emmeans` silently summarises
+  a nonsense model (e.g. a 3+-level factor coded as a number → one
+  estimate; the author declined to warn, rvlenth/emmeans #523), `pymmeans`
+  refuses a numeric focal covariate without `at=` and **names the most
+  likely fix** (`C(x)` / `pd.Categorical` when the covariate looks
+  miscoded; `at=` / `emtrends` when it is genuinely continuous). First of
+  the `docs/wishlist.md` "self-describing result" sweeteners.
 
 ## Legend
 
