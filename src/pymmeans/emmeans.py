@@ -237,13 +237,27 @@ class EMMResult:
             scale = "response scale"
         lines.append(f"  Scale: {scale}")
 
-        # Factors averaged over + weighting scheme.
+        # Factors averaged over + weighting scheme + estimand interpretation.
         averaged = [f for f in (info.factors or {}) if _canon(f) not in focal]
         if averaged:
-            lines.append(
-                f"  Averaged over: {', '.join(sorted(averaged))} "
-                f"(weights: {self.weights or 'equal'})"
-            )
+            w = self.weights or "equal"
+            interp = {
+                "equal": "balanced / experimental estimand — each combination "
+                         "weighted equally",
+                "proportional": "population-marginal — weighted by each factor's "
+                                "marginal frequencies",
+                "cells": "sample-weighted — weighted by observed cell frequencies",
+                "outer": "outer product of the marginal frequencies",
+            }.get(w, "")
+            line = f"  Averaged over: {', '.join(sorted(averaged))} (weights: {w}"
+            line += f" — {interp})" if interp else ")"
+            lines.append(line)
+            if w == "equal":
+                lines.append(
+                    "        For observational data the equal-weight default may "
+                    "not be the estimand you want; estimands() compares the "
+                    "alternatives side by side."
+                )
 
         # Covariates held fixed (and at what value).
         at = self.at or {}
@@ -2640,3 +2654,85 @@ def emmeans(
         at=dict(at) if at is not None else None,
         weights=weights if weights is not None else "equal",
     )
+
+
+def estimands(
+    model: Any,
+    specs: str | list[str],
+    by: str | list[str] | None = None,
+    schemes: tuple[str, ...] | str = ("equal", "proportional", "cells"),
+    *,
+    level: float = 0.95,
+    se: bool = False,
+    **kwargs: Any,
+) -> pd.DataFrame:
+    """Side-by-side EMMs of ``specs`` under each marginalisation scheme — the
+    "which average am I taking?" decision aid.
+
+    ``emmeans`` (like R) defaults to **equal** weighting over the non-focal
+    factors: the balanced / *experimental* estimand. For **observational**
+    data that is often the wrong target — you usually want to average over the
+    sample's actual factor distribution (``"proportional"``) or its observed
+    cell frequencies (``"cells"``). These can differ substantially on an
+    imbalanced design (Heiss 2022; the ``ggeffects`` ``marginalmeans`` vs
+    ``empirical`` distinction), and the choice is a modelling decision, not a
+    default. ``estimands()`` computes them together so the choice is explicit
+    and its consequences are visible.
+
+    Parameters
+    ----------
+    model, specs, by
+        As in :func:`emmeans`.
+    schemes
+        Weighting schemes to compare. Default is the three meaningfully
+        distinct ones: ``"equal"`` (balanced / experimental), ``"proportional"``
+        (population-marginal — weighted by each non-focal factor's marginal
+        frequencies), and ``"cells"`` (weighted by observed cell counts).
+        ``"outer"`` is also accepted.
+    level
+        Confidence level forwarded to each :func:`emmeans` call.
+    se
+        Also include an ``SE[scheme]`` column for each scheme.
+    **kwargs
+        Forwarded to each :func:`emmeans` call (e.g. ``at=``, ``type=``).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per EMM cell: the ``specs`` / ``by`` factor columns, then an
+        ``emmean[scheme]`` column per scheme (and ``SE[scheme]`` when
+        ``se=True``). On a balanced design the scheme columns coincide; on an
+        imbalanced one they diverge — that spread is exactly the estimand
+        ambiguity the user should resolve deliberately.
+    """
+    if isinstance(schemes, str):
+        schemes = (schemes,)
+    schemes = tuple(schemes)
+    if not schemes:
+        raise ValueError("schemes must name at least one weighting scheme.")
+
+    base_keys: list[str] | None = None
+    base_frame: pd.DataFrame | None = None
+    cols: dict[str, np.ndarray] = {}
+    for w in schemes:
+        frame = emmeans(
+            model, specs, by=by, weights=w, level=level, **kwargs
+        ).frame.reset_index(drop=True)
+        keys = [c for c in (_as_list(specs) + _as_list(by)) if c in frame.columns]
+        if base_keys is None:
+            base_keys = keys
+            base_frame = frame[keys].copy()
+        elif not frame[keys].reset_index(drop=True).equals(base_frame):
+            raise RuntimeError(
+                f"estimands(): the grid for weights={w!r} does not align with "
+                f"weights={schemes[0]!r}; cannot place the schemes side by side."
+            )
+        cols[f"emmean[{w}]"] = frame["emmean"].to_numpy()
+        if se:
+            cols[f"SE[{w}]"] = frame["SE"].to_numpy()
+
+    assert base_frame is not None
+    out = base_frame.copy()
+    for name, vals in cols.items():
+        out[name] = vals
+    return out

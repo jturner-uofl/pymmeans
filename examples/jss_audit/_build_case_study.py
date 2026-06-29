@@ -6663,7 +6663,76 @@ check("XXXVI.2", "describe() labels link scale and names the non-estimable cell"
 
 # ================================================================== §XXXVII
 md(r"""
-# Section XXXVII — Validation scorecard
+# Section XXXVII — Which average? `estimands()` (explicit estimand)
+
+`emmeans` (like R) defaults to **equal** weighting over the non-focal
+factors — the balanced / *experimental* estimand. For **observational**
+data that is often the wrong target; you usually want to average over the
+sample's actual factor distribution (`"proportional"`) or its observed cell
+frequencies (`"cells"`). These differ substantially on an imbalanced design
+(the deepest critique of EMMs — Heiss 2022, ggeffects), and the choice is a
+modelling decision, not a default. `estimands()` puts the schemes side by
+side so the choice is explicit.
+
+* **§XXXVII.1** — each `emmean[scheme]` column equals the matching
+  `emmeans(weights=scheme)` call exactly, and on an **imbalanced** design the
+  schemes diverge (the estimand ambiguity is real and visible).
+* **§XXXVII.2** — on a **balanced** full-factorial all schemes coincide
+  (there is then only one estimand), and `describe()` flags the equal-weight
+  default and points to `estimands()`.
+""")
+
+code(r"""
+# §XXXVII.1 - estimands() columns match the individual calls; diverge when imbalanced.
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from pymmeans import emmeans, estimands
+
+_rng_es = np.random.default_rng(0)
+_nes = 600
+_ges = _rng_es.choice(["A", "B"], _nes)
+_hes = np.where(_ges == "A", _rng_es.choice(["p", "q"], _nes, p=[0.9, 0.1]),
+                _rng_es.choice(["p", "q"], _nes, p=[0.2, 0.8]))
+_dfes = pd.DataFrame({"g": pd.Categorical(_ges), "h": pd.Categorical(_hes)})
+_dfes["y"] = (_dfes["g"].map({"A": 0.0, "B": 1.0}).astype(float)
+              + 1.5 * (_dfes["h"] == "q") + _rng_es.standard_normal(_nes))
+_fites = smf.ols("y ~ g*h", _dfes).fit()
+_tab = estimands(_fites, "g")
+print(_tab.to_string(index=False))
+_worst = 0.0
+for _w in ("equal", "proportional", "cells"):
+    _ind = emmeans(_fites, "g", weights=_w).frame["emmean"].to_numpy()
+    _worst = max(_worst, float(np.max(np.abs(_tab[f"emmean[{_w}]"].to_numpy() - _ind))))
+check("XXXVII.1", "estimands() columns equal the individual emmeans(weights=) calls",
+      _worst, 1e-12, "structural")
+check("XXXVII.1", "estimand schemes diverge on an imbalanced design",
+      0.0 if not np.allclose(_tab["emmean[equal]"], _tab["emmean[cells]"]) else 1.0,
+      0.0, "structural")
+""")
+
+code(r"""
+# §XXXVII.2 - balanced design: schemes coincide; describe() points to estimands().
+import itertools
+_rows = list(itertools.product(["A", "B"], ["p", "q"])) * 80
+_dfb = pd.DataFrame(_rows, columns=["g", "h"])
+_dfb["g"] = pd.Categorical(_dfb["g"]); _dfb["h"] = pd.Categorical(_dfb["h"])
+_dfb["y"] = (_dfb["g"].map({"A": 0.0, "B": 1.0}).astype(float)
+             + 1.5 * (_dfb["h"] == "q") + _rng_es.standard_normal(len(_dfb)))
+_tb = estimands(smf.ols("y ~ g*h", _dfb).fit(), "g")
+check("XXXVII.2", "on a balanced full-factorial all estimand schemes coincide",
+      float(max(np.max(np.abs(_tb["emmean[equal]"] - _tb["emmean[proportional]"])),
+                np.max(np.abs(_tb["emmean[equal]"] - _tb["emmean[cells]"])))),
+      1e-9, "structural")
+_dtxt = emmeans(_fites, "g").describe()
+check("XXXVII.2", "describe() flags the equal-weight default and points to estimands()",
+      0.0 if ("balanced / experimental estimand" in _dtxt and "estimands()" in _dtxt) else 1.0,
+      0.0, "structural")
+""")
+
+# ================================================================== §XXXVIII
+md(r"""
+# Section XXXVIII — Validation scorecard
 """)
 
 code(r"""

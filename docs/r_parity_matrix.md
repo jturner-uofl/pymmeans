@@ -59,6 +59,13 @@ Features `pymmeans` ships that R `emmeans` does not have:
   guidance. Neither R `emmeans` nor `marginaleffects` ships an equivalent.
   These two are the `docs/wishlist.md` "self-describing result" sweeteners,
   drawn from a sourced audit of emmeans community pain points.
+- **`estimands(model, specs, by=)`** — the "which average am I taking?"
+  decision aid: the EMM under each marginalisation scheme (`equal` /
+  `proportional` / `cells`) side by side, so the estimand choice (balanced /
+  experimental vs population-marginal vs sample-weighted) is explicit. On an
+  imbalanced design the schemes diverge — the deepest critique of EMMs
+  (Heiss 2022; the `ggeffects` `marginalmeans`-vs-`empirical` distinction) —
+  and `describe()` flags the equal-weight default and points here.
 
 ## Legend
 

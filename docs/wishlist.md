@@ -39,7 +39,7 @@ the opening — a durable differentiator, not catch-up.
 | 1 | **Annotate the result**: the active *scale*, *held-at-mean covariates* ("age=43.2"), and what was averaged over (with weights) | FAQ #7/#14/#18/#19/#20 — largest pain cluster | Low | emmeans won't clutter output | ✅ `EMMResult.describe()` (v0.20) |
 | 2 | **Footgun warnings**: warn when a 3+level factor is coded numeric (FAQ #3/#10/#11); warn when `log(x)`/`poly(x)` makes the grid use `mean(x)` not `mean(log x)` | [#523 wontfix](https://github.com/rvlenth/emmeans/issues/523), FAQ | Low–Med | **Explicitly declined by emmeans** | ✅ numeric-target error names the `C(x)` fix (v0.19); the `log(x)` grid case still open |
 | 3 | **Name which cell is non-estimable and why** ("no data for A=2, B=3") instead of bare `NonEst`/NaN | FAQ #12, [#71](https://github.com/rvlenth/emmeans/issues/71) | Low | Pure diagnostics | ✅ `describe()` names them (v0.20) |
-| 4 | **Estimand made explicit** + a "which average?" helper (equal / proportional / counterfactual), labeled in output | Heiss "Marginalia"; [marginaleffects JSS](https://arelbundock.com/research/arel-bundock_greifer_heiss_2024_how_to_interpret_statistical_models_using_marginaleffects_in_r_and_python.pdf); ggeffects | Med | The deepest critique (experimental-vs-observational) | open (design conversation) |
+| 4 | **Estimand made explicit** + a "which average?" helper (equal / proportional / cells), labeled in output | Heiss "Marginalia"; [marginaleffects JSS](https://arelbundock.com/research/arel-bundock_greifer_heiss_2024_how_to_interpret_statistical_models_using_marginaleffects_in_r_and_python.pdf); ggeffects | Med | The deepest critique (experimental-vs-observational) | ✅ `estimands()` side-by-side + `describe()` flags the equal-weight default (v0.21) |
 | 5 | **Inline "did you mean `by=`?"** when averaging over an interacting factor | FAQ #5/#16 | Low | Turns the scariest warning into a guided fix | ✅ `describe()` flags it (v0.20) |
 | 6 | **Comparison-appropriate uncertainty by default** (steer from overlapping-CI fallacy toward `pwpp`/arrows) | [comparisons vignette](https://rvlenth.github.io/emmeans/articles/comparisons.html) | Low | Default-steering emmeans only nags about | ✅ `describe()` gives the guidance (v0.20); `pwpp`/`cld` already shipped |
 
@@ -53,10 +53,11 @@ the opening — a durable differentiator, not catch-up.
 
 ## Recommendation / build order
 
-Build **#1–#3 as a "self-describing result" sequence** — low-effort, hits the
-top Q&A pains, lives in the lane emmeans structurally won't enter, and each
-annotation/warning is a clean measure-three contract. #4 (explicit estimand) is
-the strategic one but is a design conversation, not a quick cut.
+Sweeteners #1–#6 have shipped (v0.19–v0.21): mistake-catching error guidance,
+`EMMResult.describe()`, and `estimands()`. The "self-describing result" lane
+that emmeans structurally won't enter is now well covered. Remaining work is
+the lower-priority / higher-effort tier below (model-class and performance
+items), each of which is a larger, more specialised cut.
 
 ### Sourcing caveats
 

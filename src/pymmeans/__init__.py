@@ -35,7 +35,7 @@ from pymmeans.contrasts import (
 from pymmeans.datagrid import datagrid
 from pymmeans.diagnostics import Check, HealthReport, health_check
 from pymmeans.double_ml import AIPWResult, aipw_ate, cross_fit_ml_emmeans
-from pymmeans.emmeans import EMMResult, emmeans
+from pymmeans.emmeans import EMMResult, emmeans, estimands
 from pymmeans.grid_ops import (
     add_grouping,
     comb_facs,
@@ -166,7 +166,7 @@ lsmip = emmip
 lsm_options = emm_options
 get_lsm_option = get_emm_option
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 __all__ = [
     "CONTRAST_METHODS",
@@ -232,6 +232,7 @@ __all__ = [
     "emmip",
     "emmobj",
     "emtrends",
+    "estimands",
     "eta_squared",
     "force_regular",
     "from_aft",

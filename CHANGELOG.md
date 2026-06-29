@@ -5,6 +5,24 @@ All notable changes to `pymmeans` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-06-28
+
+### Added — explicit estimand / "which average?" decision aid (wish-list #4)
+
+- **`estimands(model, specs, by=)`** — computes the EMM of `specs` under each
+  marginalisation scheme (`equal` / `proportional` / `cells`) side by side, as
+  a tidy DataFrame with one `emmean[scheme]` column per scheme (and
+  `SE[scheme]` with `se=True`). `emmeans` (like R) defaults to *equal*
+  weighting — the balanced / experimental estimand — which for observational
+  data is often the wrong target; these schemes diverge substantially on an
+  imbalanced design (Heiss 2022; the `ggeffects` `marginalmeans`-vs-`empirical`
+  distinction) and coincide on a balanced one. This makes the estimand choice
+  explicit and its consequences visible — the deepest critique of EMMs,
+  addressed (`docs/wishlist.md` #4).
+- **`EMMResult.describe()`** now interprets the marginalisation estimand
+  (e.g. "weights: equal — balanced / experimental estimand") and, for the
+  equal-weight default, points to `estimands()` to compare the alternatives.
+
 ## [0.20.0] — 2026-06-28
 
 ### Added — self-describing results (wish-list sweetener cluster)
